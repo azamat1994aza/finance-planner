@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
 <title>Finance Planner</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -21,34 +22,36 @@
 const { useState, useEffect, useRef } = React;
 
 // ── Supabase config ────────────────────────────────────
-const SB_URL = "https://flquzsjctgjkripwmehk.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZscXV6c2pjdGdqa3JpcHdtZWhrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NTE5OTksImV4cCI6MjA5NjQyNzk5OX0.HahdhXnrfj_ZEV4GLRxlpM7H_gf-FsqjDGeOEbXxnFs";
-const SB_H = { "Content-Type":"application/json", "apikey":SB_KEY, "Authorization":"Bearer "+SB_KEY };
+const SB_URL = "https://txcrnjyubbamnsseludq.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR4Y3Juanl1YmJhbW5zc2VsdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MTMxOTcsImV4cCI6MjEwNDI4OTE5N30.EdLV89yHp6KvvaHbC7cfO4xLjyd2ulQwuIsRKaICCMo";
+
+const supabase = window.supabase.createClient(SB_URL, SB_KEY);
 
 const tg = window.Telegram?.WebApp;
 const USER_ID = tg?.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : "default";
 
 async function dbLoad() {
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/planner_data?user_id=eq.${USER_ID}&select=data`, { headers: SB_H });
-    if (!r.ok) { console.error("Load HTTP error:", r.status, await r.text()); return null; }
-    const rows = await r.json();
-    return rows?.[0]?.data ? JSON.parse(rows[0].data) : null;
+    const { data, error } = await supabase
+      .from("planner_data")
+      .select("data")
+      .eq("user_id", USER_ID)
+      .single();
+    if (error) { console.error("Load error:", error.message); return null; }
+    return data?.data ? JSON.parse(data.data) : null;
   } catch(e) {
-    console.error("Load fetch error:", e.message);
+    console.error("Load error:", e.message);
     return null;
   }
 }
-async function dbSave(data) {
-  const r = await fetch(`${SB_URL}/rest/v1/planner_data`, {
-    method: "POST",
-    headers: { ...SB_H, "Prefer": "resolution=merge-duplicates" },
-    body: JSON.stringify({ user_id: USER_ID, data: JSON.stringify(data), updated_at: new Date().toISOString() })
-  });
-  if (!r.ok) {
-    const txt = await r.text();
-    console.error("Save error:", r.status, txt);
-    throw new Error(`${r.status}: ${txt}`);
+
+async function dbSave(payload) {
+  const { error } = await supabase
+    .from("planner_data")
+    .upsert({ user_id: USER_ID, data: JSON.stringify(payload), updated_at: new Date().toISOString() });
+  if (error) {
+    console.error("Save error:", error.message);
+    throw new Error(error.message);
   }
 }
 
@@ -70,9 +73,11 @@ const FIN_CATS = [
   { id:"other",  label:"Другое",       emoji:"✨",color:"#F472B6" },
 ];
 const INV_PORTFOLIOS = [
-  { id:"us",    label:"Акции США",      emoji:"🇺🇸",color:"#60A5FA",platform:"Tradernet",currency:"$" },
-  { id:"kz",    label:"Акции КЗ",       emoji:"🇰🇿",color:"#43e97b",platform:"Tradernet",currency:"₸" },
-  { id:"crypto",label:"Крипто",         emoji:"💎",color:"#A78BFA",platform:"Binance",   currency:"$" },
+  { id:"us",      label:"Акции США",    emoji:"🇺🇸",color:"#60A5FA",platform:"Tradernet",currency:"$" },
+  { id:"kz",      label:"Акции КЗ",     emoji:"🇰🇿",color:"#43e97b",platform:"Tradernet",currency:"₸" },
+  { id:"crypto",  label:"Крипто",       emoji:"💎", color:"#A78BFA",platform:"Binance",   currency:"$" },
+  { id:"business",label:"Бизнес",       emoji:"💼", color:"#F59E0B",platform:"",          currency:"₸" },
+  { id:"realty",  label:"Недвижимость", emoji:"🏠", color:"#f5576c",platform:"",          currency:"₸" },
 ];
 const MONTHS = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
 const today  = new Date();
@@ -123,9 +128,11 @@ const INIT_POSITIONS = [
   { id:309,portfolio:"us",    ticker:"ONCO.US",name:"Onconova Therapeutics", qty:2552,avgPrice:1.51,currentPrice:1.00,platform:"Tradernet" },
 ];
 const INIT_INV_GOALS = [
-  { id:1,portfolio:"us",    target:5000,  deposited:3890.19,currency:"$" },
-  { id:2,portfolio:"kz",    target:500000,deposited:0,       currency:"₸" },
-  { id:3,portfolio:"crypto",target:10000, deposited:4090.96, currency:"$" },
+  { id:1,portfolio:"us",      target:5000,   deposited:3890.19,currency:"$" },
+  { id:2,portfolio:"kz",      target:500000, deposited:0,       currency:"₸" },
+  { id:3,portfolio:"crypto",  target:10000,  deposited:4090.96, currency:"$" },
+  { id:4,portfolio:"business",target:5000000,deposited:0,       currency:"₸" },
+  { id:5,portfolio:"realty",  target:30000000,deposited:0,      currency:"₸" },
 ];
 
 // ── Helpers ────────────────────────────────────────────
@@ -263,8 +270,10 @@ function App(){
         setSaveStatus("saved");
         setTimeout(()=>setSaveStatus(""),1500);
       }).catch(e=>{
-        setSaveStatus("⚠️ "+e.message.slice(0,40));
-        setTimeout(()=>setSaveStatus(""),5000);
+        const msg = e.message||"unknown";
+        alert("Ошибка сохранения:\n"+msg);
+        setSaveStatus("⚠️ "+msg.slice(0,40));
+        setTimeout(()=>setSaveStatus(""),8000);
       });
     }, 800);
   }
@@ -419,11 +428,7 @@ function App(){
       </>}
       {tab==="invest"&&<>
         <div style={{fontSize:26,fontWeight:700}}>Инвестиции 📈</div>
-        <div style={{display:"flex",gap:8,marginTop:12}}>
-          {INV_PORTFOLIOS.map(p=><button key={p.id} onClick={()=>setActivePortfolio(p.id)} style={{flex:1,background:activePortfolio===p.id?p.color+"55":"rgba(255,255,255,0.1)",border:activePortfolio===p.id?`1.5px solid ${p.color}`:"1.5px solid transparent",borderRadius:14,padding:"8px 4px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:600,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-            <span style={{fontSize:18}}>{p.emoji}</span>{p.label}
-          </button>)}
-        </div>
+        <div style={{fontSize:13,opacity:0.7,marginTop:4}}>Обзор всех активов</div>
       </>}
       {tab==="goals"&&<div style={{fontSize:26,fontWeight:700}}>Долгосрочные цели 🎯</div>}
     </div>
@@ -545,56 +550,154 @@ function App(){
 
       {/* INVEST */}
       {tab==="invest"&&<>
+        {/* Total summary */}
+        {(()=>{
+          const totalUSD = (invGoals.find(g=>g.portfolio==="us")?.deposited||0) + (invGoals.find(g=>g.portfolio==="crypto")?.deposited||0);
+          const totalKZT = (invGoals.find(g=>g.portfolio==="kz")?.deposited||0) + (invGoals.find(g=>g.portfolio==="business")?.deposited||0) + (invGoals.find(g=>g.portfolio==="realty")?.deposited||0);
+          const segments = INV_PORTFOLIOS.map(p=>{
+            const g = invGoals.find(x=>x.portfolio===p.id);
+            return {...p, deposited: g?.deposited||0, target: g?.target||0, currency: g?.currency||"₸"};
+          }).filter(p=>p.deposited>0);
+          const totalAll = segments.reduce((s,p)=>s+(p.currency==="$"?p.deposited*450:p.deposited),0);
+          // Pie chart SVG
+          let startAngle = -90;
+          const slices = segments.map(p=>{
+            const val = p.currency==="$"?p.deposited*450:p.deposited;
+            const pct = totalAll>0?val/totalAll:0;
+            const angle = pct*360;
+            const endAngle = startAngle+angle;
+            const r=80, cx=100, cy=100;
+            const x1=cx+r*Math.cos(startAngle*Math.PI/180);
+            const y1=cy+r*Math.sin(startAngle*Math.PI/180);
+            const x2=cx+r*Math.cos(endAngle*Math.PI/180);
+            const y2=cy+r*Math.sin(endAngle*Math.PI/180);
+            const large=angle>180?1:0;
+            const midAngle=(startAngle+endAngle)/2;
+            const lx=cx+(r+20)*Math.cos(midAngle*Math.PI/180);
+            const ly=cy+(r+20)*Math.sin(midAngle*Math.PI/180);
+            const path=pct>=1?`M${cx},${cy} m-${r},0 a${r},${r} 0 1,0 ${r*2},0 a${r},${r} 0 1,0 -${r*2},0`:`M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} Z`;
+            const slice={...p,path,pct,midAngle,lx,ly};
+            startAngle=endAngle;
+            return slice;
+          });
+          return <>
+            <div style={{background:"#1c1c2e",borderRadius:22,padding:"20px",marginBottom:14}}>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",letterSpacing:1,marginBottom:4}}>ВСЕГО ВЛОЖЕНО (≈)</div>
+              <div style={{fontSize:28,fontWeight:800,color:"#fff"}}>{fmt(Math.round(totalAll/1000))} тыс ₸</div>
+              <div style={{fontSize:12,opacity:0.4,marginTop:2}}>${fmt(Math.round(totalUSD))} + {fmt(Math.round(totalKZT))} ₸</div>
+              {/* Pie chart */}
+              {segments.length>0&&<div style={{display:"flex",alignItems:"center",gap:20,marginTop:16}}>
+                <svg width="200" height="200" viewBox="0 0 200 200" style={{flexShrink:0}}>
+                  {slices.map((s,i)=><path key={i} d={s.path} fill={s.color} stroke="#1c1c2e" strokeWidth="2"/>)}
+                  <circle cx="100" cy="100" r="45" fill="#1c1c2e"/>
+                  <text x="100" y="96" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="700">Портфель</text>
+                  <text x="100" y="112" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="9">{segments.length} категории</text>
+                </svg>
+                <div style={{flex:1,display:"flex",flexDirection:"column",gap:8}}>
+                  {segments.map((s,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:10,height:10,borderRadius:"50%",background:s.color,flexShrink:0}}/>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:11,fontWeight:600}}>{s.emoji} {s.label}</div>
+                      <div style={{fontSize:10,opacity:0.5}}>{fmt(s.deposited)} {s.currency}</div>
+                    </div>
+                    <div style={{fontSize:11,fontWeight:700,color:s.color}}>{(s.pct*100).toFixed(0)}%</div>
+                  </div>)}
+                </div>
+              </div>}
+              {segments.length===0&&<div style={{textAlign:"center",padding:"20px 0",opacity:0.35,fontSize:13}}>Добавь суммы через кнопку 🎯 Цель</div>}
+            </div>
+          </>;
+        })()}
+
+        {/* Portfolio tabs */}
+        <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:14}}>
+          {INV_PORTFOLIOS.map(p=><button key={p.id} onClick={()=>setActivePortfolio(p.id)} style={{flexShrink:0,background:activePortfolio===p.id?p.color+"55":"#1c1c2e",border:activePortfolio===p.id?`1.5px solid ${p.color}`:"1.5px solid transparent",borderRadius:14,padding:"8px 14px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:16}}>{p.emoji}</span>{p.label}
+          </button>)}
+        </div>
+
+        {/* Current portfolio card */}
         {curInvGoal&&<div style={{background:"#1c1c2e",borderRadius:20,padding:"16px",marginBottom:14,border:`1px solid ${curPortfolio.color}33`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
             <div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>СТОИМОСТЬ ПОРТФЕЛЯ</div>
-              <div style={{fontSize:24,fontWeight:800,color:curPortfolio.color}}>{fmt(portfolioValue(activePortfolio).toFixed(0))} {curPortfolio.currency}</div>
-              <div style={{fontSize:13,marginTop:3,color:portfolioPnL(activePortfolio)>=0?"#43e97b":"#f5576c",fontWeight:600}}>{portfolioPnL(activePortfolio)>=0?"▲":"▼"} {fmt(Math.abs(portfolioPnL(activePortfolio)).toFixed(0))} {curPortfolio.currency} P&L</div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>{curPortfolio.emoji} {curPortfolio.label.toUpperCase()} · {curInvGoal.currency}</div>
+              {curPositions.length>0
+                ? <><div style={{fontSize:24,fontWeight:800,color:curPortfolio.color}}>{fmt(portfolioValue(activePortfolio).toFixed(0))} {curPortfolio.currency}</div>
+                    <div style={{fontSize:13,marginTop:3,color:portfolioPnL(activePortfolio)>=0?"#43e97b":"#f5576c",fontWeight:600}}>{portfolioPnL(activePortfolio)>=0?"▲":"▼"} {fmt(Math.abs(portfolioPnL(activePortfolio)).toFixed(0))} {curPortfolio.currency} P&L</div></>
+                : <div style={{fontSize:24,fontWeight:800,color:curPortfolio.color}}>{fmt(curInvGoal.deposited)} {curInvGoal.currency}</div>
+              }
             </div>
-            <button onClick={()=>setEditInvGoal({...curInvGoal})} style={{background:curPortfolio.color+"22",border:`1px solid ${curPortfolio.color}55`,borderRadius:12,padding:"7px 12px",color:curPortfolio.color,fontSize:11,fontWeight:700,cursor:"pointer"}}>🎯 Цель</button>
+            <button onClick={()=>setEditInvGoal({...curInvGoal})} style={{background:curPortfolio.color+"22",border:`1px solid ${curPortfolio.color}55`,borderRadius:12,padding:"7px 12px",color:curPortfolio.color,fontSize:11,fontWeight:700,cursor:"pointer"}}>✏️ Изменить</button>
           </div>
           {curInvGoal.target>0&&<>
             <div style={{display:"flex",justifyContent:"space-between",marginTop:12,fontSize:11}}>
-              <span style={{opacity:0.45}}>Внесено: {fmt(curInvGoal.deposited)} {curInvGoal.currency}</span>
+              <span style={{opacity:0.45}}>Вложено: {fmt(curInvGoal.deposited)} {curInvGoal.currency}</span>
               <span style={{opacity:0.45}}>Цель: {fmt(curInvGoal.target)} {curInvGoal.currency}</span>
             </div>
             <div style={{marginTop:6,background:"rgba(255,255,255,0.08)",borderRadius:99,height:8,overflow:"hidden"}}>
               <div style={{width:`${Math.min((curInvGoal.deposited/curInvGoal.target)*100,100)}%`,height:"100%",background:`linear-gradient(90deg,${curPortfolio.color},#ffd200)`,borderRadius:99}}/>
             </div>
+            <div style={{fontSize:11,opacity:0.4,marginTop:4,textAlign:"right"}}>{((curInvGoal.deposited/curInvGoal.target)*100).toFixed(1)}%</div>
           </>}
         </div>}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-          <SectionTitle style={{marginBottom:0}}>Позиции ({curPositions.length})</SectionTitle>
-          <AddBtn onClick={()=>setShowAddPos(true)} color={curPortfolio.color}/>
-        </div>
-        {curPositions.length===0&&<EmptyState emoji="📊" text="Нет позиций — добавь первую"/>}
-        {curPositions.map(pos=>{
-          const val=pos.qty*pos.currentPrice; const pnl=pos.qty*(pos.currentPrice-pos.avgPrice);
-          const pnlPct=((pos.currentPrice-pos.avgPrice)/pos.avgPrice*100); const isUp=pnl>=0;
-          return <div key={pos.id} style={{background:"#1c1c2e",borderRadius:18,padding:"14px",marginBottom:10}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-              <div>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{fontWeight:800,fontSize:16,color:curPortfolio.color}}>{pos.ticker}</div>
-                  <div style={{fontSize:10,opacity:0.4,background:"rgba(255,255,255,0.07)",borderRadius:6,padding:"2px 7px"}}>{pos.platform}</div>
+
+        {/* Positions (only for stocks/crypto) */}
+        {["us","kz","crypto"].includes(activePortfolio)&&<>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <SectionTitle style={{marginBottom:0}}>Позиции ({curPositions.length})</SectionTitle>
+            <AddBtn onClick={()=>setShowAddPos(true)} color={curPortfolio.color}/>
+          </div>
+          {curPositions.length===0&&<EmptyState emoji="📊" text="Нет позиций — добавь первую"/>}
+          {curPositions.map(pos=>{
+            const val=pos.qty*pos.currentPrice; const pnl=pos.qty*(pos.currentPrice-pos.avgPrice);
+            const pnlPct=((pos.currentPrice-pos.avgPrice)/pos.avgPrice*100); const isUp=pnl>=0;
+            return <div key={pos.id} style={{background:"#1c1c2e",borderRadius:18,padding:"14px",marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{fontWeight:800,fontSize:16,color:curPortfolio.color}}>{pos.ticker}</div>
+                    <div style={{fontSize:10,opacity:0.4,background:"rgba(255,255,255,0.07)",borderRadius:6,padding:"2px 7px"}}>{pos.platform}</div>
+                  </div>
+                  <div style={{fontSize:12,opacity:0.45,marginTop:2}}>{pos.name}</div>
                 </div>
-                <div style={{fontSize:12,opacity:0.45,marginTop:2}}>{pos.name}</div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontWeight:800,fontSize:15}}>{fmt(val.toFixed(2))} {curPortfolio.currency}</div>
+                  <div style={{fontSize:12,color:isUp?"#43e97b":"#f5576c",fontWeight:600,marginTop:2}}>{isUp?"▲":"▼"} {fmt(Math.abs(pnl).toFixed(2))} ({pnlPct.toFixed(1)}%)</div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",fontSize:11,opacity:0.5}}>
+                <span>Кол-во: {pos.qty}</span><span>Ср: {pos.avgPrice}</span><span>Тек: {pos.currentPrice}</span>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button onClick={()=>setEditPos({...pos})} style={{flex:1,background:"rgba(255,255,255,0.07)",border:"none",borderRadius:10,padding:"7px",fontSize:11,color:"#fff",cursor:"pointer"}}>✏️ Изменить</button>
+                <button onClick={()=>deletePos(pos.id)} style={{background:"rgba(255,100,100,0.1)",border:"none",borderRadius:10,padding:"7px 12px",fontSize:11,color:"#f5576c",cursor:"pointer"}}>✕</button>
+              </div>
+            </div>;
+          })}
+        </>}
+
+        {/* Business / Realty — manual entry */}
+        {["business","realty"].includes(activePortfolio)&&<>
+          <SectionTitle>Объекты / Проекты</SectionTitle>
+          {curPositions.map(pos=><div key={pos.id} style={{background:"#1c1c2e",borderRadius:18,padding:"14px",marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:15,color:curPortfolio.color}}>{pos.name||pos.ticker}</div>
+                <div style={{fontSize:12,opacity:0.45,marginTop:2}}>Вложено: {fmt(pos.avgPrice)} ₸</div>
               </div>
               <div style={{textAlign:"right"}}>
-                <div style={{fontWeight:800,fontSize:15}}>{fmt(val.toFixed(2))} {curPortfolio.currency}</div>
-                <div style={{fontSize:12,color:isUp?"#43e97b":"#f5576c",fontWeight:600,marginTop:2}}>{isUp?"▲":"▼"} {fmt(Math.abs(pnl).toFixed(2))} ({pnlPct.toFixed(1)}%)</div>
+                <div style={{fontWeight:800,fontSize:15}}>{fmt(pos.currentPrice)} ₸</div>
+                <div style={{fontSize:11,color:pos.currentPrice>=pos.avgPrice?"#43e97b":"#f5576c",marginTop:2}}>{pos.currentPrice>=pos.avgPrice?"▲":"▼"} {fmt(Math.abs(pos.currentPrice-pos.avgPrice))} ₸</div>
               </div>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",fontSize:11,opacity:0.5}}>
-              <span>Кол-во: {pos.qty}</span><span>Ср: {pos.avgPrice}</span><span>Тек: {pos.currentPrice}</span>
             </div>
             <div style={{display:"flex",gap:8,marginTop:10}}>
               <button onClick={()=>setEditPos({...pos})} style={{flex:1,background:"rgba(255,255,255,0.07)",border:"none",borderRadius:10,padding:"7px",fontSize:11,color:"#fff",cursor:"pointer"}}>✏️ Изменить</button>
               <button onClick={()=>deletePos(pos.id)} style={{background:"rgba(255,100,100,0.1)",border:"none",borderRadius:10,padding:"7px 12px",fontSize:11,color:"#f5576c",cursor:"pointer"}}>✕</button>
             </div>
-          </div>;
-        })}
+          </div>)}
+          {curPositions.length===0&&<EmptyState emoji={curPortfolio.emoji} text={`Добавь ${curPortfolio.label.toLowerCase()}`}/>}
+          <AddBtn onClick={()=>setShowAddPos(true)} color={curPortfolio.color}/>
+        </>}
       </>}
 
       {/* GOALS */}
@@ -720,14 +823,46 @@ function App(){
       </Modal>}
 
       {/* Edit Inv Goal */}
-      {editInvGoal&&<Modal onClose={()=>setEditInvGoal(null)} title={`🎯 Цель — ${INV_PORTFOLIOS.find(p=>p.id===editInvGoal.portfolio)?.label}`}>
-        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:5}}>УЖЕ ВНЕСЕНО</div>
-        <FInput placeholder="0" value={String(editInvGoal.deposited)} onChange={v=>setEditInvGoal(p=>({...p,deposited:v}))} type="number"/>
-        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:5}}>ЦЕЛЕВАЯ СУММА</div>
-        <FInput placeholder="0" value={String(editInvGoal.target)} onChange={v=>setEditInvGoal(p=>({...p,target:v}))} type="number"/>
-        {Number(editInvGoal.target)>0&&<div style={{marginBottom:14}}>
-          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:99,height:10,overflow:"hidden"}}><div style={{width:`${Math.min((Number(editInvGoal.deposited)/Number(editInvGoal.target))*100,100)}%`,height:"100%",background:"linear-gradient(90deg,#A78BFA,#ffd200)",borderRadius:99}}/></div>
-          <div style={{textAlign:"center",marginTop:5,fontSize:12,color:"#A78BFA",fontWeight:700}}>{((Number(editInvGoal.deposited)/Number(editInvGoal.target))*100).toFixed(1)}%</div>
+      {editInvGoal&&<Modal onClose={()=>setEditInvGoal(null)} title={`✏️ ${INV_PORTFOLIOS.find(p=>p.id===editInvGoal.portfolio)?.emoji} ${INV_PORTFOLIOS.find(p=>p.id===editInvGoal.portfolio)?.label}`}>
+        {/* Currency selector */}
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,letterSpacing:1}}>ВАЛЮТА</div>
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {["₸","$","€","£"].map(cur=>(
+            <button key={cur} onClick={()=>setEditInvGoal(p=>({...p,currency:cur}))}
+              style={{flex:1,background:editInvGoal.currency===cur?"rgba(167,139,250,0.3)":"#2a2a3e",border:editInvGoal.currency===cur?"2px solid #A78BFA":"2px solid transparent",borderRadius:12,padding:"10px 4px",cursor:"pointer",color:editInvGoal.currency===cur?"#fff":"rgba(255,255,255,0.5)",fontSize:18,fontWeight:700}}>
+              {cur}
+            </button>
+          ))}
+        </div>
+        {/* Deposited */}
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ВЛОЖЕНО СЕЙЧАС</div>
+        <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+          <input type="number" placeholder="0" value={String(editInvGoal.deposited)}
+            onChange={e=>setEditInvGoal(p=>({...p,deposited:e.target.value}))}
+            style={{flex:1,background:"#2a2a3e",border:"2px solid #a3ffcf",borderRadius:14,padding:"13px 16px",fontSize:18,fontWeight:700,color:"#a3ffcf",outline:"none",boxSizing:"border-box"}}/>
+          <span style={{fontSize:18,fontWeight:700,opacity:0.6,minWidth:24}}>{editInvGoal.currency}</span>
+        </div>
+        {/* Target */}
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ЦЕЛЕВАЯ СУММА (необязательно)</div>
+        <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+          <input type="number" placeholder="0" value={String(editInvGoal.target)}
+            onChange={e=>setEditInvGoal(p=>({...p,target:e.target.value}))}
+            style={{flex:1,background:"#2a2a3e",border:"2px solid rgba(255,255,255,0.1)",borderRadius:14,padding:"13px 16px",fontSize:18,fontWeight:700,color:"#fff",outline:"none",boxSizing:"border-box"}}/>
+          <span style={{fontSize:18,fontWeight:700,opacity:0.6,minWidth:24}}>{editInvGoal.currency}</span>
+        </div>
+        {/* Live progress */}
+        {Number(editInvGoal.target)>0&&<div style={{background:"#2a2a3e",borderRadius:16,padding:"14px",marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:8}}>
+            <span style={{opacity:0.5}}>До цели</span>
+            <span style={{fontWeight:700,color:"#A78BFA"}}>{Math.min((Number(editInvGoal.deposited)/Number(editInvGoal.target))*100,100).toFixed(1)}%</span>
+          </div>
+          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:99,height:10,overflow:"hidden"}}>
+            <div style={{width:`${Math.min((Number(editInvGoal.deposited)/Number(editInvGoal.target))*100,100)}%`,height:"100%",background:"linear-gradient(90deg,#A78BFA,#ffd200)",borderRadius:99}}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,opacity:0.45}}>
+            <span>Вложено: {fmt(Number(editInvGoal.deposited))} {editInvGoal.currency}</span>
+            <span>Осталось: {fmt(Math.max(Number(editInvGoal.target)-Number(editInvGoal.deposited),0))} {editInvGoal.currency}</span>
+          </div>
         </div>}
         <PBtn onClick={saveInvGoal} label="Сохранить" gradient="linear-gradient(135deg,#A78BFA,#6d28d9)"/>
       </Modal>}
