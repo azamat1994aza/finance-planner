@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<title>Finance Planner</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { background:#0f0f1a; font-family:-apple-system,sans-serif; color:#fff; overscroll-behavior:none; }
+  input[type=date]::-webkit-calendar-picker-indicator { filter:invert(1); }
+  ::-webkit-scrollbar { display:none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ── Supabase config ────────────────────────────────────
+const SB_URL = "https://txcrnjyubbamnsseludq.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR4Y3Juanl1YmJhbW5zc2VsdWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MTMxOTcsImV4cCI6MjEwNDI4OTE5N30.EdLV89yHp6KvvaHbC7cfO4xLjyd2ulQwuIsRKaICCMo";
+
+const supabase = window.supabase.createClient(SB_URL, SB_KEY);
+
+const tg = window.Telegram?.WebApp;
+const USER_ID = tg?.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : "default";
+
+async function dbLoad() {
+  try {
+    const { data, error } = await supabase
+      .from("planner_data")
+      .select("data")
+      .eq("user_id", USER_ID)
+      .single();
+    if (error) { console.error("Load error:", error.message); return null; }
+    return data?.data ? JSON.parse(data.data) : null;
+  } catch(e) {
+    console.error("Load error:", e.message);
+    return null;
+  }
+}
+
+async function dbSave(payload) {
+  const { error } = await supabase
+    .from("planner_data")
+    .upsert({ user_id: USER_ID, data: JSON.stringify(payload), updated_at: new Date().toISOString() });
+  if (error) {
+    console.error("Save error:", error.message);
+    throw new Error(error.message);
+  }
+}
+
+// ── Constants ──────────────────────────────────────────
+const CAT_COLORS = { "Финансы":"#1a9e6e","Личное":"#7a28ff","Здоровье":"#e7b84a","Работа":"#1e88e5","Семья":"#e8a44a" };
+const CAT_EMOJI  = { "Финансы":"💰","Личное":"👤","Здоровье":"💊","Работа":"💼","Семья":"👨‍👩‍👧" };
+const FIN_TYPES  = [
+  { id:"expense",label:"Расход",  emoji:"💸",color:"#f5576c" },
+  { id:"income", label:"Доход",   emoji:"💚",color:"#43e97b" },
+  { id:"planned",label:"Плановый",emoji:"📌",color:"#60A5FA" },
+];
+const FIN_CATS = [
+  { id:"credit", label:"Кредиты",      emoji:"🏦",color:"#FF6B6B" },
+  { id:"utility",label:"Коммуналка",   emoji:"🔌",color:"#4ECDC4" },
+  { id:"invest", label:"Инвестиции",   emoji:"📈",color:"#A78BFA" },
+  { id:"food",   label:"Еда",          emoji:"🍔",color:"#F59E0B" },
+  { id:"health", label:"Здоровье",     emoji:"💊",color:"#34D399" },
+  { id:"work",   label:"Работа/Бизнес",emoji:"💼",color:"#60A5FA" },
+  { id:"other",  label:"Другое",       emoji:"✨",color:"#F472B6" },
+];
+const INV_PORTFOLIOS = [
+  { id:"us",      label:"Акции США",    emoji:"🇺🇸",color:"#60A5FA",platform:"Tradernet",currency:"$" },
+  { id:"kz",      label:"Акции КЗ",     emoji:"🇰🇿",color:"#43e97b",platform:"Tradernet",currency:"₸" },
+  { id:"crypto",  label:"Крипто",       emoji:"💎", color:"#A78BFA",platform:"Binance",   currency:"$" },
+  { id:"business",label:"Бизнес",       emoji:"💼", color:"#F59E0B",platform:"",          currency:"₸" },
+  { id:"realty",  label:"Недвижимость", emoji:"🏠", color:"#f5576c",platform:"",          currency:"₸" },
+];
+const MONTHS = ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
+const today  = new Date();
+const fmt    = n => Number(n).toLocaleString("ru-RU");
+const nextMonthDate = d => { const x=new Date(d); x.setMonth(x.getMonth()+1); return x.toISOString().split("T")[0]; };
+const getMonthLabel = off => { const d=new Date(today); d.setMonth(d.getMonth()+off); return MONTHS[d.getMonth()]+" "+d.getFullYear(); };
+
+const INIT_FINANCES = [
+  { id:1, type:"planned",cat:"credit", label:"Машина кредит",    amount:200000,date:"2026-06-30",paid:false,note:"",month:0 },
+  { id:2, type:"planned",cat:"credit", label:"Каспи кредит",     amount:70000, date:"2026-06-25",paid:false,note:"",month:0 },
+  { id:3, type:"planned",cat:"credit", label:"BCC кредит",       amount:50000, date:"2026-06-25",paid:false,note:"180 карта",month:0 },
+  { id:4, type:"planned",cat:"utility",label:"Коммуналка",       amount:30000, date:"2026-06-20",paid:false,note:"",month:0 },
+  { id:5, type:"planned",cat:"credit", label:"Рауда квартира",   amount:200000,date:"2026-06-28",paid:false,note:"до 2027г",month:0 },
+  { id:6, type:"planned",cat:"invest", label:"100$ Крипто",      amount:50000, date:"2026-06-15",paid:false,note:"",month:0 },
+  { id:7, type:"planned",cat:"invest", label:"100$ Казах. акция",amount:50000, date:"2026-06-15",paid:false,note:"",month:0 },
+  { id:8, type:"planned",cat:"invest", label:"100$ Амер. акция", amount:50000, date:"2026-06-15",paid:false,note:"",month:0 },
+  { id:9, type:"planned",cat:"work",   label:"Заказать спортпит",amount:500000,date:"2026-06-30",paid:false,note:"",month:0 },
+];
+const INIT_TASKS = [
+  { id:1, text:"Мама телефон",                  category:"Личное",  status:"Не начато",note:"",month:0 },
+  { id:2, text:"Пропить витамины",              category:"Здоровье",status:"Не начато",note:"",month:0 },
+  { id:3, text:"Закрыть карту 180 — 200 000 ₸",category:"Личное",  status:"Не начато",note:"",month:0 },
+  { id:4, text:"Стоматолог",                    category:"Здоровье",status:"Не начато",note:"",month:0 },
+  { id:5, text:"Сделать хиджаму",               category:"Здоровье",status:"Не начато",note:"",month:0 },
+  { id:6, text:"Сделать 1000 шт UZMAX",         category:"Работа",  status:"Не начато",note:"",month:0 },
+  { id:7, text:"Прочитать «Разумный инвестор»", category:"Личное",  status:"Не начато",note:"",month:0 },
+  { id:8, text:"Купить двойку одежду",          category:"Личное",  status:"Не начато",note:"",month:0 },
+];
+const INIT_GOALS = [
+  { id:201,emoji:"🏠",text:"Купить 4-комнатную квартиру",sub:"Собрать 50%",saved:0,target:30000000,isTenge:true },
+  { id:202,emoji:"🏦",text:"Открыть счёт в Otbasy Bank",sub:"200 000 ₸/мес",saved:0,target:0,isTenge:true },
+  { id:203,emoji:"🚙",text:"Машина Tucson 2023",sub:"",saved:0,target:12000000,isTenge:true },
+  { id:204,emoji:"🕌",text:"Большой хадж",sub:"",saved:0,target:5000000,isTenge:true },
+  { id:205,emoji:"💇",text:"Помещение под салон красоты",sub:"",saved:0,target:9000000,isTenge:true },
+  { id:206,emoji:"🏙️",text:"Квартира в Астане",sub:"",saved:0,target:0,isTenge:true },
+  { id:207,emoji:"🏘️",text:"3 квартиры в Актобе",sub:"",saved:0,target:0,isTenge:true },
+  { id:208,emoji:"💎",text:"Crypto цель",sub:"STRK·PEPE·POL·BONK·1INCH",saved:0,target:10000,isTenge:false },
+];
+const INIT_POSITIONS = [
+  { id:301,portfolio:"crypto",ticker:"STRK", name:"Starknet Token",         qty:36293.36,avgPrice:0.05452,currentPrice:0.0335,platform:"Binance" },
+  { id:302,portfolio:"crypto",ticker:"PEPE", name:"Pepe",                   qty:309040858,avgPrice:0.00000492,currentPrice:0.00000277,platform:"Binance" },
+  { id:303,portfolio:"crypto",ticker:"POL",  name:"Polygon",                qty:10723.47,avgPrice:0.12741,currentPrice:0.07942,platform:"Binance" },
+  { id:304,portfolio:"crypto",ticker:"BONK", name:"Bonk",                   qty:123560926,avgPrice:0.00000968,currentPrice:0.00000437,platform:"Binance" },
+  { id:305,portfolio:"crypto",ticker:"1INCH",name:"1inch",                  qty:5192.48,avgPrice:0.15394,currentPrice:0.0698,platform:"Binance" },
+  { id:306,portfolio:"crypto",ticker:"MET",  name:"Meteora",                qty:2715.32,avgPrice:0.22934,currentPrice:0.0975,platform:"Binance" },
+  { id:307,portfolio:"us",    ticker:"NCRA.US",name:"NovaBay Pharmaceuticals",qty:5020,avgPrice:0.25,currentPrice:0.18,platform:"Tradernet" },
+  { id:308,portfolio:"us",    ticker:"CIG.US", name:"Turning Point Brands",  qty:800, avgPrice:2.22,currentPrice:2.09,platform:"Tradernet" },
+  { id:309,portfolio:"us",    ticker:"ONCO.US",name:"Onconova Therapeutics", qty:2552,avgPrice:1.51,currentPrice:1.00,platform:"Tradernet" },
+];
+const INIT_DEPOSITS = [
+  // Otbasy Bank (1st)
+  { id:5, name:"Азамат",   type:"otbasy",  bank:"Otbasy Bank", amount:0, target:0, currency:"₸", note:"" },
+  { id:6, name:"Аятулла",  type:"otbasy",  bank:"Otbasy Bank", amount:0, target:0, currency:"₸", note:"" },
+  { id:7, name:"Аиша",     type:"otbasy",  bank:"Otbasy Bank", amount:0, target:0, currency:"₸", note:"" },
+  { id:8, name:"Акырыс",   type:"otbasy",  bank:"Otbasy Bank", amount:0, target:0, currency:"₸", note:"" },
+  // Aqyl детские (2nd)
+  { id:1, name:"Аятулла",  type:"child",   bank:"Aqyl",        amount:0, target:0, currency:"₸", note:"" },
+  { id:2, name:"Аиша",     type:"child",   bank:"Aqyl",        amount:0, target:0, currency:"₸", note:"" },
+  // ЕНПФ пенсионные (3rd)
+  { id:3, name:"Азамат",   type:"pension", bank:"ЕНПФ",        amount:0, target:0, currency:"₸", note:"" },
+  { id:4, name:"Акырыс",   type:"pension", bank:"ЕНПФ",        amount:0, target:0, currency:"₸", note:"" },
+];
+
+const INIT_INV_GOALS = [
+  { id:1,portfolio:"us",      target:5000,   deposited:3890.19,currency:"$" },
+  { id:2,portfolio:"kz",      target:500000, deposited:0,       currency:"₸" },
+  { id:3,portfolio:"crypto",  target:10000,  deposited:4090.96, currency:"$" },
+  { id:4,portfolio:"business",target:5000000,deposited:0,       currency:"₸" },
+  { id:5,portfolio:"realty",  target:30000000,deposited:0,      currency:"₸" },
+];
+
+// ── Helpers ────────────────────────────────────────────
+function SectionTitle({children,style}){ return <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.35)",letterSpacing:1,marginBottom:9,...style}}>{children}</div>; }
+function StatCard({emoji,label,value,sub,color}){ return <div style={{background:"#1c1c2e",borderRadius:20,padding:"14px",textAlign:"center"}}><div style={{fontSize:24,marginBottom:5}}>{emoji}</div><div style={{fontSize:20,fontWeight:800,color}}>{value}</div><div style={{fontSize:10,opacity:0.4,marginTop:2}}>{label}{sub?" · "+sub:""}</div></div>; }
+function AddBtn({onClick,color}){ return <button onClick={onClick} style={{background:color||"#667eea",border:"none",borderRadius:50,width:36,height:36,fontSize:20,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 4px 12px ${color||"#667eea"}55`,fontWeight:700}}>+</button>; }
+function FInput({placeholder,value,onChange,type="text"}){ return <input type={type} placeholder={placeholder} value={value} onChange={e=>onChange(e.target.value)} style={{width:"100%",background:"#2a2a3e",border:"none",borderRadius:14,padding:"12px 16px",fontSize:14,color:"#fff",marginBottom:10,outline:"none",boxSizing:"border-box"}}/>; }
+function PBtn({onClick,label,gradient,textColor}){ return <button onClick={onClick} style={{width:"100%",background:gradient,border:"none",borderRadius:16,padding:"14px",fontSize:15,fontWeight:700,color:textColor||"#fff",cursor:"pointer"}}>{label}</button>; }
+function EmptyState({emoji,text}){ return <div style={{textAlign:"center",padding:"36px 0",opacity:0.3}}><div style={{fontSize:38,marginBottom:8}}>{emoji}</div><div style={{fontSize:13}}>{text}</div></div>; }
+function Modal({onClose,title,children}){
+  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",backdropFilter:"blur(8px)",zIndex:100,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+    <div style={{background:"#1c1c2e",borderRadius:"26px 26px 0 0",padding:"22px 18px 44px",width:"100%",maxWidth:430,maxHeight:"85vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+        <div style={{fontSize:15,fontWeight:700,flex:1,marginRight:12}}>{title}</div>
+        <button onClick={onClose} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:"50%",width:30,height:30,color:"#fff",cursor:"pointer",fontSize:15}}>×</button>
+      </div>
+      {children}
+    </div>
+  </div>;
+}
+
+function FinRow({fin,onToggle,onDelete,onEdit}){
+  const cat=FIN_CATS.find(c=>c.id===fin.cat)||FIN_CATS[6];
+  const typeColor=fin.type==="income"?"#43e97b":fin.type==="planned"?"#60A5FA":"#f5576c";
+  const sign=fin.type==="income"?"+":"−";
+  return <div style={{background:"#1c1c2e",borderRadius:18,padding:"12px 14px",marginBottom:9,opacity:fin.paid&&fin.type!=="expense"?0.5:1}}>
+    <div style={{display:"flex",alignItems:"center",gap:10}}>
+      {fin.type==="planned"
+        ? <button onClick={()=>onToggle(fin.id)} style={{width:28,height:28,borderRadius:"50%",border:`2px solid ${fin.paid?"#43e97b":"#60A5FA"}`,background:fin.paid?"rgba(67,233,122,0.2)":"transparent",cursor:"pointer",color:fin.paid?"#43e97b":"#60A5FA",fontSize:12,fontWeight:700,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{fin.paid?"✓":"○"}</button>
+        : <div style={{width:28,height:28,borderRadius:"50%",background:typeColor+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,flexShrink:0}}>{fin.type==="income"?"↑":"↓"}</div>
+      }
+      <div style={{width:34,height:34,borderRadius:11,background:cat.color+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{cat.emoji}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:600,fontSize:13,textDecoration:fin.paid&&fin.type==="planned"?"line-through":"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{fin.label}</div>
+        <div style={{display:"flex",gap:6,marginTop:3,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:10,opacity:0.35}}>{fin.date}</span>
+          {fin.note&&<span style={{fontSize:10,opacity:0.3}}>· {fin.note}</span>}
+          {fin.type==="planned"&&<span style={{fontSize:9,background:fin.paid?"rgba(67,233,122,0.15)":"rgba(96,165,250,0.12)",color:fin.paid?"#43e97b":"#60A5FA",borderRadius:5,padding:"1px 6px",fontWeight:600}}>{fin.paid?"Оплачено":"Запланировано"}</span>}
+        </div>
+      </div>
+      <div style={{fontWeight:800,color:typeColor,fontSize:13,flexShrink:0}}>{sign}{fmt(fin.amount)} ₸</div>
+      <button onClick={()=>onEdit(fin)} style={{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:14,cursor:"pointer",padding:"4px 2px"}}>✏️</button>
+      <button onClick={()=>onDelete(fin.id)} style={{background:"none",border:"none",color:"rgba(255,100,100,0.35)",fontSize:17,cursor:"pointer",padding:4}}>×</button>
+    </div>
+  </div>;
+}
+
+function TaskRow({task,onCycle,onDelete}){
+  const S={"Не начато":{bg:"rgba(170,170,170,0.12)",color:"#aaa",label:"○"},"В процессе":{bg:"rgba(245,166,35,0.15)",color:"#f5a623",label:"◑"},"Готово":{bg:"rgba(76,175,80,0.15)",color:"#4caf50",label:"✓"}};
+  const s=S[task.status]||S["Не начато"];
+  const cc=CAT_COLORS[task.category]||"#888";
+  return <div style={{background:"#1c1c2e",borderRadius:18,padding:"12px 14px",marginBottom:9,display:"flex",alignItems:"center",gap:10,opacity:task.status==="Готово"?0.45:1}}>
+    <button onClick={()=>onCycle(task.id)} style={{width:28,height:28,borderRadius:"50%",border:`2px solid ${s.color}`,background:s.bg,cursor:"pointer",color:s.color,fontSize:13,fontWeight:700,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{s.label}</button>
+    <div style={{flex:1,minWidth:0}}>
+      <div style={{fontWeight:600,fontSize:13,textDecoration:task.status==="Готово"?"line-through":"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{task.text}</div>
+      <div style={{display:"flex",gap:6,marginTop:3}}>
+        <span style={{fontSize:9,background:cc+"28",color:cc,borderRadius:6,padding:"1px 7px",fontWeight:600}}>{CAT_EMOJI[task.category]} {task.category}</span>
+        {task.note&&<span style={{fontSize:10,opacity:0.35}}>{task.note}</span>}
+      </div>
+    </div>
+    <button onClick={()=>onDelete(task.id)} style={{background:"none",border:"none",color:"rgba(255,100,100,0.35)",fontSize:17,cursor:"pointer",padding:4}}>×</button>
+  </div>;
+}
+
+// ── Main App ───────────────────────────────────────────
+function App(){
+  const [loading,    setLoading]    = useState(true);
+  const [saveStatus, setSaveStatus] = useState("");
+  const [tab,        setTab]        = useState("dashboard");
+  const [currentMonth,setCurrentMonth] = useState(0);
+  const [finances,   setFinances]   = useState(INIT_FINANCES);
+  const [tasks,      setTasks]      = useState(INIT_TASKS);
+  const [goals,      setGoals]      = useState(INIT_GOALS);
+  const [positions,  setPositions]  = useState(INIT_POSITIONS);
+  const [invGoals,   setInvGoals]   = useState(INIT_INV_GOALS);
+  const [deposits,   setDeposits]   = useState(INIT_DEPOSITS);
+  const [editDeposit,setEditDeposit]= useState(null);
+  const [showDeposits,setShowDeposits]=useState(false);
+  const [showAddGoal,setShowAddGoal]= useState(false);
+  const [newGoal,setNewGoal]= useState({emoji:"🎯",text:"",sub:"",saved:0,target:0,isTenge:true});
+  const [showAddDeposit,setShowAddDeposit]= useState(false);
+  const [newDeposit,setNewDeposit]= useState({name:"",type:"otbasy",bank:"Otbasy Bank",amount:0,target:0,currency:"₸",note:""});
+  const [monthlyIncomes, setMonthlyIncomes] = useState({});
+
+  // modals
+  const [editFin,     setEditFin]     = useState(null);
+  const [editGoal,    setEditGoal]    = useState(null);
+  const [savedInput,  setSavedInput]  = useState("");
+  const [targetInput, setTargetInput] = useState("");
+  const [editPos,     setEditPos]     = useState(null);
+  const [editInvGoal, setEditInvGoal] = useState(null);
+  const [showAddFin,  setShowAddFin]  = useState(false);
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [showAddPos,  setShowAddPos]  = useState(false);
+  const [showRollover,setShowRollover]= useState(false);
+  const [showIncomeEditor,setShowIncomeEditor] = useState(false);
+  const [incomeEdit,  setIncomeEdit]  = useState(null);
+  const [rolloverSel, setRolloverSel] = useState({finances:[],tasks:[]});
+  const [filterType,  setFilterType]  = useState("all");
+  const [sortBy,      setSortBy]      = useState("date");
+  const [filterCat,   setFilterCat]   = useState("Все");
+  const [activePortfolio,setActivePortfolio] = useState("us");
+  const [newFin,  setNewFin]  = useState({type:"planned",cat:"credit",label:"",amount:"",date:today.toISOString().split("T")[0],note:""});
+  const [newTask, setNewTask] = useState({text:"",category:"Личное",note:""});
+  const [newPos,  setNewPos]  = useState({portfolio:"crypto",ticker:"",name:"",qty:"",avgPrice:"",currentPrice:"",platform:"Binance"});
+
+  const saveTimer = useRef(null);
+
+  // ── Load from Supabase ─────────────────────────────
+  useEffect(()=>{
+    tg?.ready?.();
+    tg?.expand?.();
+    dbLoad().then(d=>{
+      if(d){
+        if(Array.isArray(d.finances))    setFinances(d.finances);
+        if(Array.isArray(d.tasks))       setTasks(d.tasks);
+        if(Array.isArray(d.goals))       setGoals(d.goals);
+        if(Array.isArray(d.positions))   setPositions(d.positions);
+        if(Array.isArray(d.invGoals))    setInvGoals(d.invGoals);
+        if(Array.isArray(d.deposits))    setDeposits(d.deposits);
+        if(typeof d.currentMonth==="number") setCurrentMonth(d.currentMonth);
+        if(d.monthlyIncomes)             setMonthlyIncomes(d.monthlyIncomes);
+      }
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  },[]);
+
+  // ── Save (debounced 800ms) ─────────────────────────
+  function save(patch){
+    const data = {
+      finances:     patch.finances     ?? finances,
+      tasks:        patch.tasks        ?? tasks,
+      goals:        patch.goals        ?? goals,
+      positions:    patch.positions    ?? positions,
+      invGoals:     patch.invGoals     ?? invGoals,
+      currentMonth: patch.currentMonth ?? currentMonth,
+      deposits:     patch.deposits     ?? deposits,
+      monthlyIncomes: patch.monthlyIncomes ?? monthlyIncomes,
+    };
+    setSaveStatus("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(()=>{
+      dbSave(data).then(()=>{
+        setSaveStatus("saved");
+        setTimeout(()=>setSaveStatus(""),1500);
+      }).catch(e=>{
+        const msg = e.message||"unknown";
+        alert("Ошибка сохранения:\n"+msg);
+        setSaveStatus("⚠️ "+msg.slice(0,40));
+        setTimeout(()=>setSaveStatus(""),8000);
+      });
+    }, 800);
+  }
+
+  // ── Finance helpers ────────────────────────────────
+  const mFin   = finances.filter(f=>f.month===currentMonth);
+  const mTasks = tasks.filter(t=>t.month===currentMonth);
+  const allExp = mFin.filter(f=>f.type==="expense");
+  const allPln = mFin.filter(f=>f.type==="planned");
+  const allInc = mFin.filter(f=>f.type==="income");
+  const totalSpent   = allExp.reduce((s,f)=>s+f.amount,0);
+  const totalPlanned = allPln.reduce((s,f)=>s+f.amount,0);
+  const totalIncome  = allInc.reduce((s,f)=>s+f.amount,0);
+  const paidPlanned  = allPln.filter(f=>f.paid).reduce((s,f)=>s+f.amount,0);
+  const unpaidTotal  = allPln.filter(f=>!f.paid).reduce((s,f)=>s+f.amount,0)+totalSpent;
+  const grandNeed    = totalPlanned+totalSpent;
+  const grandPaid    = paidPlanned+totalSpent;
+  const grandPct     = grandNeed>0?Math.min((grandPaid/grandNeed)*100,100):0;
+  const tasksDone    = mTasks.filter(t=>t.status==="Готово").length;
+  const curMonthIncome = monthlyIncomes[currentMonth]||{sources:[],total:0};
+
+  function saveMonthIncome(sources){
+    const total=sources.reduce((s,x)=>s+Number(x.amount||0),0);
+    const updated={...monthlyIncomes,[currentMonth]:{sources,total}};
+    setMonthlyIncomes(updated); save({monthlyIncomes:updated});
+  }
+
+  const displayedRaw = filterType==="all"?mFin:mFin.filter(f=>f.type===filterType);
+  const displayed    = [...displayedRaw].sort((a,b)=>sortBy==="amount"?b.amount-a.amount:(a.date||"").localeCompare(b.date||""));
+
+  function addFinance(){
+    if(!newFin.label||!newFin.amount) return;
+    const u=[...finances,{...newFin,id:Date.now(),amount:Number(newFin.amount),paid:newFin.type==="expense",month:currentMonth}];
+    setFinances(u); save({finances:u});
+    setNewFin({type:"planned",cat:"credit",label:"",amount:"",date:today.toISOString().split("T")[0],note:""});
+    setShowAddFin(false);
+  }
+  function togglePaid(id){ const u=finances.map(f=>f.id===id?{...f,paid:!f.paid}:f); setFinances(u); save({finances:u}); }
+  function deleteFin(id) { const u=finances.filter(f=>f.id!==id); setFinances(u); save({finances:u}); }
+  function saveEditFin(){
+    if(!editFin) return;
+    const u=finances.map(f=>f.id===editFin.id?{...editFin,amount:Number(editFin.amount)}:f);
+    setFinances(u); save({finances:u}); setEditFin(null);
+  }
+  function addTask(){
+    if(!newTask.text) return;
+    const u=[...tasks,{...newTask,id:Date.now(),status:"Не начато",month:currentMonth}];
+    setTasks(u); save({tasks:u}); setNewTask({text:"",category:"Личное",note:""}); setShowAddTask(false);
+  }
+  function cycleStatus(id){
+    const c=["Не начато","В процессе","Готово"];
+    const u=tasks.map(t=>t.id===id?{...t,status:c[(c.indexOf(t.status)+1)%3]}:t);
+    setTasks(u); save({tasks:u});
+  }
+  function deleteTask(id){ const u=tasks.filter(t=>t.id!==id); setTasks(u); save({tasks:u}); }
+
+  function openRollover(){
+    setRolloverSel({
+      finances:mFin.filter(f=>f.type==="planned"&&!f.paid).map(f=>f.id),
+      tasks:mTasks.filter(t=>t.status!=="Готово").map(t=>t.id)
+    });
+    setShowRollover(true);
+  }
+  function doRollover(){
+    const nm=currentMonth+1;
+    const newF=[...finances,...finances.filter(f=>rolloverSel.finances.includes(f.id)).map(f=>({...f,id:Date.now()+Math.random(),month:nm,paid:false,date:nextMonthDate(f.date)}))];
+    const newT=[...tasks,...tasks.filter(t=>rolloverSel.tasks.includes(t.id)).map(t=>({...t,id:Date.now()+Math.random(),month:nm,status:"Не начато"}))];
+    setFinances(newF); setTasks(newT); setCurrentMonth(nm);
+    save({finances:newF,tasks:newT,currentMonth:nm});
+    setShowRollover(false);
+  }
+
+  function saveGoal(){
+    const u=goals.map(g=>g.id===editGoal.id?{...g,saved:Number(savedInput)||0,target:Number(targetInput)||0}:g);
+    setGoals(u); save({goals:u}); setEditGoal(null);
+  }
+  function addPosition(){
+    if(!newPos.ticker||!newPos.qty||!newPos.avgPrice) return;
+    const u=[...positions,{...newPos,id:Date.now(),qty:Number(newPos.qty),avgPrice:Number(newPos.avgPrice),currentPrice:Number(newPos.currentPrice)||Number(newPos.avgPrice)}];
+    setPositions(u); save({positions:u}); setNewPos({portfolio:"crypto",ticker:"",name:"",qty:"",avgPrice:"",currentPrice:"",platform:"Binance"}); setShowAddPos(false);
+  }
+  function deletePos(id){ const u=positions.filter(x=>x.id!==id); setPositions(u); save({positions:u}); }
+  function saveEditPos(){
+    const u=positions.map(x=>x.id===editPos.id?{...editPos,qty:Number(editPos.qty),avgPrice:Number(editPos.avgPrice),currentPrice:Number(editPos.currentPrice)}:x);
+    setPositions(u); save({positions:u}); setEditPos(null);
+  }
+  function saveInvGoal(){
+    const u=invGoals.map(g=>g.id===editInvGoal.id?{...editInvGoal,target:Number(editInvGoal.target),deposited:Number(editInvGoal.deposited)}:g);
+    setInvGoals(u); save({invGoals:u}); setEditInvGoal(null);
+  }
+
+  const portfolioValue = pid => positions.filter(p=>p.portfolio===pid).reduce((s,p)=>s+p.qty*p.currentPrice,0);
+  const portfolioPnL   = pid => positions.filter(p=>p.portfolio===pid).reduce((s,p)=>s+p.qty*(p.currentPrice-p.avgPrice),0);
+
+  function saveDeposit(d) {
+    const u = deposits.map(x=>x.id===d.id?{...d,amount:Number(d.amount)||0,target:Number(d.target)||0}:x);
+    setDeposits(u); save({deposits:u}); setEditDeposit(null);
+  }
+  function addGoal() {
+    if (!newGoal.text) return;
+    const u = [...goals, {...newGoal, id:Date.now(), saved:Number(newGoal.saved)||0, target:Number(newGoal.target)||0}];
+    setGoals(u); save({goals:u}); setShowAddGoal(false);
+    setNewGoal({emoji:"🎯",text:"",sub:"",saved:0,target:0,isTenge:true});
+  }
+  function deleteGoal(id) {
+    const u = goals.filter(g=>g.id!==id); setGoals(u); save({goals:u});
+  }
+  function addDeposit() {
+    if (!newDeposit.name) return;
+    const u = [...deposits, {...newDeposit, id:Date.now(), amount:Number(newDeposit.amount)||0, target:Number(newDeposit.target)||0}];
+    setDeposits(u); save({deposits:u}); setShowAddDeposit(false);
+    setNewDeposit({name:"",type:"otbasy",bank:"Otbasy Bank",amount:0,target:0,currency:"₸",note:""});
+  }
+  function deleteDeposit(id) {
+    const u = deposits.filter(d=>d.id!==id); setDeposits(u); save({deposits:u});
+  }
+
+  const allTaskCats   = ["Все",...Object.keys(CAT_COLORS)];
+  const filteredTasks = filterCat==="Все"?mTasks:mTasks.filter(t=>t.category===filterCat);
+  const curPortfolio  = INV_PORTFOLIOS.find(p=>p.id===activePortfolio);
+  const curPositions  = positions.filter(p=>p.portfolio===activePortfolio);
+  const curInvGoal    = invGoals.find(g=>g.portfolio===activePortfolio);
+
+  const gradients={
+    dashboard:"linear-gradient(135deg,#667eea,#764ba2)",
+    finance:  "linear-gradient(135deg,#11998e,#38ef7d)",
+    tasks:    "linear-gradient(135deg,#4facfe,#00f2fe)",
+    invest:   "linear-gradient(135deg,#A78BFA,#6d28d9)",
+    goals:    "linear-gradient(135deg,#f7971e,#ffd200)",
+    deposits: "linear-gradient(135deg,#F59E0B,#f59e0b99)",
+  };
+
+  if(loading) return <div style={{minHeight:"100vh",background:"#0f0f1a",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+    <div style={{fontSize:48}}>📊</div>
+    <div style={{fontSize:16,fontWeight:700}}>Загружаю данные...</div>
+    <div style={{fontSize:12,opacity:0.4}}>Синхронизация с облаком</div>
+  </div>;
+
+  return <div style={{minHeight:"100vh",background:"#0f0f1a",fontFamily:"-apple-system,sans-serif",color:"#fff",maxWidth:430,margin:"0 auto"}}>
+
+    {/* Save badge */}
+    {saveStatus&&<div style={{position:"fixed",top:14,right:16,zIndex:200,background:saveStatus==="error"?"#f5576c":saveStatus==="saving"?"rgba(255,255,255,0.2)":"#43e97b",color:saveStatus==="saved"?"#0a2018":"#fff",borderRadius:20,padding:"5px 14px",fontSize:11,fontWeight:700,boxShadow:"0 2px 12px rgba(0,0,0,0.3)"}}>
+      {saveStatus==="saved"?"✓ Сохранено":saveStatus==="saving"?"💾 Сохраняю...":"⚠️ Ошибка"}
+    </div>}
+
+    {/* Header */}
+    <div style={{background:gradients[tab],padding:"52px 24px 24px",borderRadius:"0 0 32px 32px",marginBottom:20}}>
+      <div style={{fontSize:13,opacity:0.85,marginBottom:4}}>{MONTHS[today.getMonth()]} {today.getFullYear()}</div>
+      {tab==="dashboard"&&<><div style={{fontSize:26,fontWeight:700}}>Привет! 👋</div><div style={{fontSize:13,opacity:0.8,marginTop:3}}>Держи всё под контролем</div></>}
+      {tab==="finance"&&<>
+        <div style={{fontSize:26,fontWeight:700}}>Финансы 💳</div>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginTop:10}}>
+          <button onClick={()=>setCurrentMonth(m=>Math.max(0,m-1))} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,padding:"5px 14px",color:"#fff",cursor:"pointer",fontSize:16}}>‹</button>
+          <div style={{flex:1,textAlign:"center",fontWeight:700,fontSize:15}}>{getMonthLabel(currentMonth)}</div>
+          <button onClick={()=>setCurrentMonth(m=>m+1)} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,padding:"5px 14px",color:"#fff",cursor:"pointer",fontSize:16}}>›</button>
+        </div>
+        <div style={{marginTop:12,background:"rgba(0,0,0,0.2)",borderRadius:18,padding:"12px 16px"}}>
+          <div style={{fontSize:11,opacity:0.65,marginBottom:4}}>НУЖНО ЗАКРЫТЬ</div>
+          <div style={{fontSize:26,fontWeight:800}}>{fmt(grandNeed)} ₸</div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:3,fontSize:11,opacity:0.7}}>
+            <span>Закрыто: {fmt(grandPaid)} ₸</span>
+            <span style={{color:unpaidTotal>0?"#ffcb6b":"#a3ffcf"}}>Осталось: {fmt(unpaidTotal)} ₸</span>
+          </div>
+          <div style={{marginTop:8,background:"rgba(255,255,255,0.15)",borderRadius:99,height:7,overflow:"hidden"}}>
+            <div style={{width:`${grandPct}%`,height:"100%",background:"rgba(255,255,255,0.9)",borderRadius:99}}/>
+          </div>
+        </div>
+      </>}
+      {tab==="tasks"&&<>
+        <div style={{fontSize:26,fontWeight:700}}>Дела 📋</div>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginTop:10}}>
+          <button onClick={()=>setCurrentMonth(m=>Math.max(0,m-1))} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,padding:"5px 14px",color:"#fff",cursor:"pointer",fontSize:16}}>‹</button>
+          <div style={{flex:1,textAlign:"center",fontWeight:700,fontSize:15}}>{getMonthLabel(currentMonth)}</div>
+          <button onClick={()=>setCurrentMonth(m=>m+1)} style={{background:"rgba(255,255,255,0.2)",border:"none",borderRadius:10,padding:"5px 14px",color:"#fff",cursor:"pointer",fontSize:16}}>›</button>
+        </div>
+      </>}
+      {tab==="invest"&&<>
+        <div style={{fontSize:26,fontWeight:700}}>Инвестиции 📈</div>
+        <div style={{fontSize:13,opacity:0.7,marginTop:4}}>Обзор всех активов</div>
+      </>}
+      {tab==="goals"&&<div style={{fontSize:26,fontWeight:700}}>Долгосрочные цели 🎯</div>}
+      {tab==="deposits"&&<div style={{fontSize:26,fontWeight:700}}>Вклады 🏦</div>}
+    </div>
+
+    <div style={{padding:"0 14px 100px"}}>
+
+      {/* DASHBOARD */}
+      {tab==="dashboard"&&<>
+        <div style={{background:"linear-gradient(135deg,#11998e,#38ef7d)",borderRadius:24,padding:"16px 20px",marginBottom:12,color:"#0a2018"}}>
+          <div style={{fontSize:11,fontWeight:600,opacity:0.65,marginBottom:6}}>ЗАКРЫТЬ В {getMonthLabel(currentMonth).toUpperCase()}</div>
+          <div style={{fontSize:26,fontWeight:800}}>{fmt(grandNeed)} ₸</div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:3,fontSize:12,fontWeight:600}}>
+            <span style={{opacity:0.7}}>Закрыто {fmt(grandPaid)} ₸</span>
+            <span>Осталось {fmt(unpaidTotal)} ₸</span>
+          </div>
+          <div style={{marginTop:10,background:"rgba(0,0,0,0.15)",borderRadius:99,height:7,overflow:"hidden"}}>
+            <div style={{width:`${grandPct}%`,height:"100%",background:"#0a2018",borderRadius:99}}/>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
+          <StatCard emoji="💚" label="Доход"   value={fmt(curMonthIncome.total)} sub="₸"  color="#43e97b"/>
+          <StatCard emoji="📌" label="Платежи" value={allPln.filter(f=>!f.paid).length} sub="не опл." color="#60A5FA"/>
+          <StatCard emoji="✅" label="Дела"    value={`${tasksDone}/${mTasks.length}`} sub="готово" color="#4facfe"/>
+        </div>
+        <div style={{background:"#1c1c2e",borderRadius:18,padding:"14px 16px",marginBottom:14,display:"flex",gap:10}}>
+          {INV_PORTFOLIOS.map(p=>{ const val=portfolioValue(p.id); const pnl=portfolioPnL(p.id);
+            return <div key={p.id} style={{flex:1,textAlign:"center"}}>
+              <div style={{fontSize:18}}>{p.emoji}</div>
+              <div style={{fontSize:13,fontWeight:700,color:p.color,marginTop:3}}>{fmt(val.toFixed(0))} {p.currency}</div>
+              <div style={{fontSize:10,color:pnl>=0?"#43e97b":"#f5576c",marginTop:1}}>{pnl>=0?"+":""}{fmt(pnl.toFixed(0))}</div>
+            </div>;
+          })}
+        </div>
+        <SectionTitle>Срочные платежи</SectionTitle>
+        {allPln.filter(f=>!f.paid).slice(0,3).map(f=><FinRow key={f.id} fin={f} onToggle={togglePaid} onDelete={deleteFin} onEdit={f=>setEditFin({...f})}/>)}
+        {allPln.filter(f=>!f.paid).length===0&&<EmptyState emoji="🎉" text="Все платежи закрыты!"/>}
+        <SectionTitle style={{marginTop:16}}>Ближайшие дела</SectionTitle>
+        {mTasks.filter(t=>t.status!=="Готово").slice(0,3).map(t=><TaskRow key={t.id} task={t} onCycle={cycleStatus} onDelete={deleteTask}/>)}
+      </>}
+
+      {/* FINANCE */}
+      {tab==="finance"&&<>
+        {/* Income card */}
+        <div style={{background:"linear-gradient(135deg,#0d2a1a,#1a3a2a)",border:"1px solid rgba(67,233,122,0.2)",borderRadius:22,padding:"16px 18px",marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",letterSpacing:1,marginBottom:6}}>ДОХОД В {getMonthLabel(currentMonth).toUpperCase()}</div>
+              <div style={{fontSize:28,fontWeight:800,color:"#43e97b"}}>{fmt(curMonthIncome.total)} ₸</div>
+              {curMonthIncome.sources.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
+                {curMonthIncome.sources.map(s=><div key={s.id} style={{background:"rgba(67,233,122,0.1)",borderRadius:10,padding:"3px 10px",fontSize:11,color:"#43e97b"}}>{s.label}: {fmt(s.amount)} ₸</div>)}
+              </div>}
+              {curMonthIncome.sources.length===0&&<div style={{fontSize:12,opacity:0.35,marginTop:4}}>Нажми Изменить чтобы добавить</div>}
+            </div>
+            <button onClick={()=>{ setIncomeEdit({sources:[...(curMonthIncome.sources||[])]}); setShowIncomeEditor(true); }} style={{background:"rgba(67,233,122,0.15)",border:"1px solid rgba(67,233,122,0.35)",borderRadius:14,padding:"8px 14px",color:"#43e97b",fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:12}}>✏️ Изменить</button>
+          </div>
+          {curMonthIncome.total>0&&grandNeed>0&&<div style={{marginTop:12,paddingTop:12,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:6}}>
+              <span style={{opacity:0.45}}>Покрывает расходы:</span>
+              <span style={{fontWeight:700,color:curMonthIncome.total>=grandNeed?"#43e97b":"#f7971e"}}>{((curMonthIncome.total/grandNeed)*100).toFixed(0)}%</span>
+            </div>
+            <div style={{background:"rgba(255,255,255,0.07)",borderRadius:99,height:6,overflow:"hidden"}}>
+              <div style={{width:`${Math.min((curMonthIncome.total/grandNeed)*100,100)}%`,height:"100%",background:"linear-gradient(90deg,#43e97b,#38f9d7)",borderRadius:99}}/>
+            </div>
+            <div style={{fontSize:11,opacity:0.4,marginTop:5,textAlign:"right"}}>
+              {curMonthIncome.total>=grandNeed?"Свободно: "+fmt(curMonthIncome.total-grandNeed)+" ₸ 🎉":"Не хватает: "+fmt(grandNeed-curMonthIncome.total)+" ₸"}
+            </div>
+          </div>}
+        </div>
+
+        {/* Type filter */}
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          {[{id:"all",label:"Все",emoji:"📊"},...FIN_TYPES].map(ft=><button key={ft.id} onClick={()=>setFilterType(ft.id)} style={{flex:1,background:filterType===ft.id?(ft.color||"#667eea")+"33":"#1c1c2e",border:filterType===ft.id?`1.5px solid ${ft.color||"#667eea"}`:"1.5px solid transparent",borderRadius:14,padding:"9px 4px",fontSize:10,fontWeight:600,color:"#fff",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+            <span style={{fontSize:16}}>{ft.emoji||"📊"}</span>{ft.label||"Все"}
+          </button>)}
+        </div>
+        {/* Sort */}
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          {[{id:"date",label:"По дате",emoji:"📅"},{id:"amount",label:"По сумме",emoji:"💰"}].map(s=><button key={s.id} onClick={()=>setSortBy(s.id)} style={{flex:1,background:sortBy===s.id?"rgba(255,255,255,0.1)":"#1c1c2e",border:sortBy===s.id?"1.5px solid rgba(255,255,255,0.25)":"1.5px solid transparent",borderRadius:12,padding:"8px 10px",fontSize:12,fontWeight:sortBy===s.id?700:400,color:sortBy===s.id?"#fff":"rgba(255,255,255,0.4)",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+            {s.emoji} {s.label} {sortBy===s.id&&(s.id==="date"?"↑":"↓")}
+          </button>)}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <button onClick={openRollover} style={{background:"rgba(247,151,30,0.15)",border:"1px solid rgba(247,151,30,0.4)",borderRadius:12,padding:"8px 14px",color:"#f7971e",fontSize:12,fontWeight:700,cursor:"pointer"}}>🔄 Перенести на след. месяц</button>
+          <AddBtn onClick={()=>setShowAddFin(true)} color="#38ef7d"/>
+        </div>
+        {displayed.length===0&&<EmptyState emoji="💳" text="Нет записей"/>}
+        {displayed.map(f=><FinRow key={f.id} fin={f} onToggle={togglePaid} onDelete={deleteFin} onEdit={f=>setEditFin({...f})}/>)}
+        {/* Totals */}
+        <div style={{background:"#1c1c2e",borderRadius:20,padding:"16px 20px",marginTop:14,border:"1px solid rgba(255,255,255,0.06)"}}>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginBottom:10,letterSpacing:1}}>ИТОГО ЗА МЕСЯЦ</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
+            <div style={{textAlign:"center"}}><div style={{fontSize:10,opacity:0.4,marginBottom:3}}>Расходы</div><div style={{fontSize:14,fontWeight:800,color:"#f5576c"}}>−{fmt(totalSpent)}</div></div>
+            <div style={{textAlign:"center",borderLeft:"1px solid rgba(255,255,255,0.07)",borderRight:"1px solid rgba(255,255,255,0.07)"}}><div style={{fontSize:10,opacity:0.4,marginBottom:3}}>Плановые</div><div style={{fontSize:14,fontWeight:800,color:"#60A5FA"}}>{fmt(totalPlanned)}</div></div>
+            <div style={{textAlign:"center"}}><div style={{fontSize:10,opacity:0.4,marginBottom:3}}>Доходы</div><div style={{fontSize:14,fontWeight:800,color:"#43e97b"}}>+{fmt(totalIncome)}</div></div>
+          </div>
+          <div style={{paddingTop:12,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><span style={{fontSize:12,opacity:0.5}}>Нужно закрыть:</span><span style={{fontSize:14,fontWeight:800,color:"#ffcb6b"}}>{fmt(grandNeed)} ₸</span></div>
+            <div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,opacity:0.5}}>Осталось:</span><span style={{fontSize:14,fontWeight:800,color:unpaidTotal===0?"#43e97b":"#f5576c"}}>{fmt(unpaidTotal)} ₸</span></div>
+          </div>
+        </div>
+      </>}
+
+      {/* TASKS */}
+      {tab==="tasks"&&<>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div style={{fontSize:12,opacity:0.45}}>{tasksDone} / {mTasks.length} выполнено</div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={openRollover} style={{background:"rgba(247,151,30,0.15)",border:"1px solid rgba(247,151,30,0.4)",borderRadius:12,padding:"7px 12px",color:"#f7971e",fontSize:11,fontWeight:700,cursor:"pointer"}}>🔄 Перенести</button>
+            <AddBtn onClick={()=>setShowAddTask(true)} color="#00f2fe"/>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:10,marginBottom:8}}>
+          {allTaskCats.map(c=><button key={c} onClick={()=>setFilterCat(c)} style={{flexShrink:0,background:filterCat===c?(CAT_COLORS[c]||"#4facfe"):"#1c1c2e",border:"none",borderRadius:20,padding:"6px 14px",fontSize:11,fontWeight:600,color:"#fff",cursor:"pointer",opacity:filterCat===c?1:0.5}}>{CAT_EMOJI[c]||"🔍"} {c}</button>)}
+        </div>
+        {filteredTasks.filter(t=>t.status!=="Готово").length>0&&<><SectionTitle>В работе</SectionTitle>{filteredTasks.filter(t=>t.status!=="Готово").map(t=><TaskRow key={t.id} task={t} onCycle={cycleStatus} onDelete={deleteTask}/>)}</>}
+        {filteredTasks.filter(t=>t.status==="Готово").length>0&&<><SectionTitle style={{marginTop:14}}>Готово ✅</SectionTitle>{filteredTasks.filter(t=>t.status==="Готово").map(t=><TaskRow key={t.id} task={t} onCycle={cycleStatus} onDelete={deleteTask}/>)}</>}
+        {filteredTasks.length===0&&<EmptyState emoji="📋" text="Нет задач"/>}
+      </>}
+
+      {/* INVEST */}
+      {tab==="invest"&&<>
+        {/* Total summary with donut chart */}
+        {(()=>{
+          const USD_RATE = 450;
+          const allSegs = INV_PORTFOLIOS.map(p=>{
+            const g = invGoals.find(x=>x.portfolio===p.id);
+            const dep = Number(g?.deposited)||0;
+            const cur = g?.currency||"₸";
+            const valKZT = cur==="$" ? dep*USD_RATE : dep;
+            return {...p, deposited:dep, currency:cur, valKZT};
+          });
+          const totalKZT_equiv = allSegs.reduce((s,p)=>s+p.valKZT, 0);
+          const totalUSD = allSegs.filter(s=>s.currency==="$").reduce((s,p)=>s+p.deposited,0);
+          const totalKZT = allSegs.filter(s=>s.currency==="₸").reduce((s,p)=>s+p.deposited,0);
+          const segs = allSegs.filter(s=>s.valKZT>0);
+
+          // Donut
+          const R=65, r=38, cx=80, cy=80;
+          let ang=-90;
+          const slices = segs.map(s=>{
+            const pct = totalKZT_equiv>0 ? s.valKZT/totalKZT_equiv : 0;
+            const deg = pct*360;
+            const a1=ang*Math.PI/180, a2=(ang+deg)*Math.PI/180;
+            const x1=cx+R*Math.cos(a1),y1=cy+R*Math.sin(a1);
+            const x2=cx+R*Math.cos(a2),y2=cy+R*Math.sin(a2);
+            const xi1=cx+r*Math.cos(a1),yi1=cy+r*Math.sin(a1);
+            const xi2=cx+r*Math.cos(a2),yi2=cy+r*Math.sin(a2);
+            const lg=deg>180?1:0;
+            const path=pct>=0.9999?`M${cx+R},${cy} A${R},${R} 0 1,1 ${cx+R-0.01},${cy} Z`:`M${x1},${y1} A${R},${R} 0 ${lg},1 ${x2},${y2} L${xi2},${yi2} A${r},${r} 0 ${lg},0 ${xi1},${yi1} Z`;
+            ang+=deg;
+            return {...s, path, pct};
+          });
+
+          return <div style={{background:"#1c1c2e",borderRadius:22,padding:"20px",marginBottom:14}}>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",letterSpacing:1,marginBottom:4}}>ВСЕГО ВЛОЖЕНО</div>
+            <div style={{fontSize:26,fontWeight:800,color:"#fff"}}>≈ {fmt(Math.round(totalKZT_equiv))} ₸</div>
+            <div style={{fontSize:12,opacity:0.4,marginTop:2}}>
+              {totalUSD>0&&<span>${fmt(totalUSD)} </span>}
+              {totalKZT>0&&<span>{fmt(totalKZT)} ₸</span>}
+            </div>
+            {segs.length>0 ? <div style={{display:"flex",alignItems:"center",gap:14,marginTop:16}}>
+              <svg width="160" height="160" viewBox="0 0 160 160" style={{flexShrink:0}}>
+                {slices.map((s,i)=><path key={i} d={s.path} fill={s.color} stroke="#1c1c2e" strokeWidth="3"/>)}
+                <text x="80" y="76" textAnchor="middle" fill="#fff" fontSize="9" fontWeight="700">Портфель</text>
+                <text x="80" y="90" textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize="8">{segs.length} из 5</text>
+              </svg>
+              <div style={{flex:1,display:"flex",flexDirection:"column",gap:8}}>
+                {allSegs.map((s,i)=><div key={i} style={{opacity:s.valKZT>0?1:0.3}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <div style={{width:7,height:7,borderRadius:"50%",background:s.color}}/>
+                      <span style={{fontSize:10,fontWeight:600}}>{s.emoji} {s.label}</span>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:700,color:s.color}}>
+                      {s.valKZT>0&&totalKZT_equiv>0 ? (s.valKZT/totalKZT_equiv*100).toFixed(0)+"%" : "—"}
+                    </span>
+                  </div>
+                  <div style={{fontSize:11,color:s.color,opacity:0.8,marginTop:1,marginLeft:13}}>
+                    {s.deposited>0 ? `${fmt(s.deposited)} ${s.currency}` : "не указано"}
+                  </div>
+                </div>)}
+              </div>
+            </div> : <div style={{textAlign:"center",padding:"20px 0",opacity:0.3,fontSize:13}}>Нажми ✏️ Изменить чтобы добавить суммы</div>}
+          </div>;
+        })()}
+
+        {/* Portfolio tabs */}
+        <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:14}}>
+          {INV_PORTFOLIOS.map(p=><button key={p.id} onClick={()=>setActivePortfolio(p.id)} style={{flexShrink:0,background:activePortfolio===p.id?p.color+"55":"#1c1c2e",border:activePortfolio===p.id?`1.5px solid ${p.color}`:"1.5px solid transparent",borderRadius:14,padding:"8px 14px",cursor:"pointer",color:"#fff",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:16}}>{p.emoji}</span>{p.label}
+          </button>)}
+        </div>
+
+        {/* Current portfolio card */}
+        {curInvGoal&&<div style={{background:"#1c1c2e",borderRadius:20,padding:"16px",marginBottom:14,border:`1px solid ${curPortfolio.color}33`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>{curPortfolio.emoji} {curPortfolio.label.toUpperCase()} · {curInvGoal.currency}</div>
+              {curPositions.length>0
+                ? <><div style={{fontSize:24,fontWeight:800,color:curPortfolio.color}}>{fmt(portfolioValue(activePortfolio).toFixed(0))} {curPortfolio.currency}</div>
+                    <div style={{fontSize:13,marginTop:3,color:portfolioPnL(activePortfolio)>=0?"#43e97b":"#f5576c",fontWeight:600}}>{portfolioPnL(activePortfolio)>=0?"▲":"▼"} {fmt(Math.abs(portfolioPnL(activePortfolio)).toFixed(0))} {curPortfolio.currency} P&L</div></>
+                : <div style={{fontSize:24,fontWeight:800,color:curPortfolio.color}}>{fmt(curInvGoal.deposited)} {curInvGoal.currency}</div>
+              }
+            </div>
+            <button onClick={()=>setEditInvGoal({...curInvGoal})} style={{background:curPortfolio.color+"22",border:`1px solid ${curPortfolio.color}55`,borderRadius:12,padding:"7px 12px",color:curPortfolio.color,fontSize:11,fontWeight:700,cursor:"pointer"}}>✏️ Изменить</button>
+          </div>
+          {curInvGoal.target>0&&<>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:12,fontSize:11}}>
+              <span style={{opacity:0.45}}>Вложено: {fmt(curInvGoal.deposited)} {curInvGoal.currency}</span>
+              <span style={{opacity:0.45}}>Цель: {fmt(curInvGoal.target)} {curInvGoal.currency}</span>
+            </div>
+            <div style={{marginTop:6,background:"rgba(255,255,255,0.08)",borderRadius:99,height:8,overflow:"hidden"}}>
+              <div style={{width:`${Math.min((curInvGoal.deposited/curInvGoal.target)*100,100)}%`,height:"100%",background:`linear-gradient(90deg,${curPortfolio.color},#ffd200)`,borderRadius:99}}/>
+            </div>
+            <div style={{fontSize:11,opacity:0.4,marginTop:4,textAlign:"right"}}>{((curInvGoal.deposited/curInvGoal.target)*100).toFixed(1)}%</div>
+          </>}
+        </div>}
+
+        {/* Positions (only for stocks/crypto) */}
+        {["us","kz","crypto"].includes(activePortfolio)&&<>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <SectionTitle style={{marginBottom:0}}>Позиции ({curPositions.length})</SectionTitle>
+            <AddBtn onClick={()=>setShowAddPos(true)} color={curPortfolio.color}/>
+          </div>
+          {curPositions.length===0&&<EmptyState emoji="📊" text="Нет позиций — добавь первую"/>}
+          {curPositions.map(pos=>{
+            const val=pos.qty*pos.currentPrice; const pnl=pos.qty*(pos.currentPrice-pos.avgPrice);
+            const pnlPct=((pos.currentPrice-pos.avgPrice)/pos.avgPrice*100); const isUp=pnl>=0;
+            return <div key={pos.id} style={{background:"#1c1c2e",borderRadius:18,padding:"14px",marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{fontWeight:800,fontSize:16,color:curPortfolio.color}}>{pos.ticker}</div>
+                    <div style={{fontSize:10,opacity:0.4,background:"rgba(255,255,255,0.07)",borderRadius:6,padding:"2px 7px"}}>{pos.platform}</div>
+                  </div>
+                  <div style={{fontSize:12,opacity:0.45,marginTop:2}}>{pos.name}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontWeight:800,fontSize:15}}>{fmt(val.toFixed(2))} {curPortfolio.currency}</div>
+                  <div style={{fontSize:12,color:isUp?"#43e97b":"#f5576c",fontWeight:600,marginTop:2}}>{isUp?"▲":"▼"} {fmt(Math.abs(pnl).toFixed(2))} ({pnlPct.toFixed(1)}%)</div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",fontSize:11,opacity:0.5}}>
+                <span>Кол-во: {pos.qty}</span><span>Ср: {pos.avgPrice}</span><span>Тек: {pos.currentPrice}</span>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button onClick={()=>setEditPos({...pos})} style={{flex:1,background:"rgba(255,255,255,0.07)",border:"none",borderRadius:10,padding:"7px",fontSize:11,color:"#fff",cursor:"pointer"}}>✏️ Изменить</button>
+                <button onClick={()=>deletePos(pos.id)} style={{background:"rgba(255,100,100,0.1)",border:"none",borderRadius:10,padding:"7px 12px",fontSize:11,color:"#f5576c",cursor:"pointer"}}>✕</button>
+              </div>
+            </div>;
+          })}
+        </>}
+
+        {/* Business / Realty — manual entry */}
+        {["business","realty"].includes(activePortfolio)&&<>
+          <SectionTitle>Объекты / Проекты</SectionTitle>
+          {curPositions.map(pos=><div key={pos.id} style={{background:"#1c1c2e",borderRadius:18,padding:"14px",marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:15,color:curPortfolio.color}}>{pos.name||pos.ticker}</div>
+                <div style={{fontSize:12,opacity:0.45,marginTop:2}}>Вложено: {fmt(pos.avgPrice)} ₸</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:800,fontSize:15}}>{fmt(pos.currentPrice)} ₸</div>
+                <div style={{fontSize:11,color:pos.currentPrice>=pos.avgPrice?"#43e97b":"#f5576c",marginTop:2}}>{pos.currentPrice>=pos.avgPrice?"▲":"▼"} {fmt(Math.abs(pos.currentPrice-pos.avgPrice))} ₸</div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:10}}>
+              <button onClick={()=>setEditPos({...pos})} style={{flex:1,background:"rgba(255,255,255,0.07)",border:"none",borderRadius:10,padding:"7px",fontSize:11,color:"#fff",cursor:"pointer"}}>✏️ Изменить</button>
+              <button onClick={()=>deletePos(pos.id)} style={{background:"rgba(255,100,100,0.1)",border:"none",borderRadius:10,padding:"7px 12px",fontSize:11,color:"#f5576c",cursor:"pointer"}}>✕</button>
+            </div>
+          </div>)}
+          {curPositions.length===0&&<EmptyState emoji={curPortfolio.emoji} text={`Добавь ${curPortfolio.label.toLowerCase()}`}/>}
+          <AddBtn onClick={()=>setShowAddPos(true)} color={curPortfolio.color}/>
+        </>}
+      </>}
+
+      {/* GOALS */}
+      {tab==="goals"&&<>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <SectionTitle style={{marginBottom:0}}>Долгосрочные цели</SectionTitle>
+          <AddBtn onClick={()=>setShowAddGoal(true)} color="#f7971e"/>
+        </div>
+        {goals.map(g=>{
+          const pct=g.target>0?Math.min((g.saved/g.target)*100,100):0; const cur=g.isTenge?"₸":"$";
+          return <div key={g.id} onClick={()=>{setEditGoal(g);setSavedInput(String(g.saved));setTargetInput(String(g.target));}} style={{background:"#1c1c2e",borderRadius:20,padding:"16px",marginBottom:12,cursor:"pointer",border:"1px solid rgba(255,255,255,0.04)"}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
+              <div style={{fontSize:26,lineHeight:1}}>{g.emoji}</div>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}><div style={{fontWeight:700,fontSize:14,flex:1,marginRight:8}}>{g.text}</div><div style={{background:"rgba(247,151,30,0.15)",borderRadius:8,padding:"3px 8px",fontSize:11,color:"#f7971e",fontWeight:600}}>✏️</div></div>
+                {g.target>0?<>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:12}}>
+                    <span style={{color:"#a3ffcf",fontWeight:700}}>Накоплено: {fmt(g.saved)} {cur}</span>
+                    <span style={{opacity:0.4}}>из {fmt(g.target)} {cur}</span>
+                  </div>
+                  <div style={{marginTop:8,background:"rgba(255,255,255,0.08)",borderRadius:99,height:9,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#f7971e,#ffd200)",borderRadius:99}}/></div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:10}}>
+                    <span style={{opacity:0.35}}>{pct.toFixed(1)}%</span>
+                    <span style={{color:"#ffd200",opacity:0.7}}>осталось: {fmt(Math.max(g.target-g.saved,0))} {cur}</span>
+                  </div>
+                </>:<div style={{marginTop:5,fontSize:11,opacity:0.35}}>{g.sub||"Нажми чтобы задать сумму"}</div>}
+              </div>
+            </div>
+          </div>;
+        })}
+      </>}
+
+      {/* DEPOSITS */}
+      {tab==="deposits"&&<>
+        {/* Summary */}
+        {(()=>{
+          const totalChild   = deposits.filter(d=>d.type==="child").reduce((s,d)=>s+d.amount,0);
+          const totalPension = deposits.filter(d=>d.type==="pension").reduce((s,d)=>s+d.amount,0);
+          const totalOtbasy  = deposits.filter(d=>d.type==="otbasy").reduce((s,d)=>s+d.amount,0);
+          const total = totalChild+totalPension+totalOtbasy;
+
+          // Donut chart
+          const segs = [
+            {label:"Otbasy",color:"#F59E0B",val:totalOtbasy},
+            {label:"Aqyl",  color:"#4facfe",val:totalChild},
+            {label:"ЕНПФ",  color:"#43e97b",val:totalPension},
+          ].filter(s=>s.val>0);
+          const R=65,r=38,cx=80,cy=80;
+          let ang=-90;
+          const slices=segs.map(s=>{
+            const pct=total>0?s.val/total:0;
+            const deg=pct*360;
+            const a1=ang*Math.PI/180, a2=(ang+deg)*Math.PI/180;
+            const x1=cx+R*Math.cos(a1),y1=cy+R*Math.sin(a1);
+            const x2=cx+R*Math.cos(a2),y2=cy+R*Math.sin(a2);
+            const xi1=cx+r*Math.cos(a1),yi1=cy+r*Math.sin(a1);
+            const xi2=cx+r*Math.cos(a2),yi2=cy+r*Math.sin(a2);
+            const lg=deg>180?1:0;
+            const path=pct>=0.9999?`M${cx+R},${cy} A${R},${R} 0 1,1 ${cx+R-0.01},${cy} Z`:`M${x1},${y1} A${R},${R} 0 ${lg},1 ${x2},${y2} L${xi2},${yi2} A${r},${r} 0 ${lg},0 ${xi1},${yi1} Z`;
+            ang+=deg;
+            return {...s,path,pct};
+          });
+
+          return <div style={{background:"#1c1c2e",borderRadius:22,padding:"18px 20px",marginBottom:16}}>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",letterSpacing:1,marginBottom:6}}>ВСЕГО ВО ВКЛАДАХ</div>
+            <div style={{fontSize:30,fontWeight:800,color:"#F59E0B"}}>{fmt(total)} ₸</div>
+            {total>0 ? <div style={{display:"flex",alignItems:"center",gap:16,marginTop:14}}>
+              <svg width="160" height="160" viewBox="0 0 160 160" style={{flexShrink:0}}>
+                {slices.map((s,i)=><path key={i} d={s.path} fill={s.color} stroke="#1c1c2e" strokeWidth="3"/>)}
+                <text x="80" y="76" textAnchor="middle" fill="#fff" fontSize="9" fontWeight="700">Вклады</text>
+                <text x="80" y="90" textAnchor="middle" fill="rgba(255,255,255,0.4)" fontSize="8">{segs.length} раздела</text>
+              </svg>
+              <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+                {[{label:"🏠 Otbasy",color:"#F59E0B",val:totalOtbasy},{label:"👶 Aqyl",color:"#4facfe",val:totalChild},{label:"🏛️ ЕНПФ",color:"#43e97b",val:totalPension}].map((s,i)=>(
+                  <div key={i} style={{opacity:s.val>0?1:0.3}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{width:8,height:8,borderRadius:"50%",background:s.color}}/>
+                        <span style={{fontSize:11,fontWeight:600}}>{s.label}</span>
+                      </div>
+                      <span style={{fontSize:11,fontWeight:700,color:s.color}}>{total>0?(s.val/total*100).toFixed(0):0}%</span>
+                    </div>
+                    <div style={{fontSize:12,fontWeight:700,color:s.color,marginTop:2}}>{fmt(s.val)} ₸</div>
+                  </div>
+                ))}
+              </div>
+            </div> : <div style={{textAlign:"center",padding:"20px 0",opacity:0.3,fontSize:13}}>Добавь суммы через ✏️ Изменить</div>}
+          </div>;
+        })()}
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <SectionTitle style={{marginBottom:0}}>Все вклады</SectionTitle>
+          <AddBtn onClick={()=>setShowAddDeposit(true)} color="#F59E0B"/>
+        </div>
+
+        {/* Otbasy Bank FIRST */}
+        <SectionTitle>🏠 Otbasy Bank</SectionTitle>
+        {deposits.filter(d=>d.type==="otbasy").map(d=>{
+          const pct = d.target>0 ? Math.min((d.amount/d.target)*100,100) : 0;
+          return <div key={d.id} style={{background:"#1c1c2e",borderRadius:20,padding:"16px",marginBottom:12,border:"1px solid rgba(245,158,11,0.25)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:700}}>{d.name}</div>
+                <div style={{fontSize:12,opacity:0.45,marginTop:2}}>{d.bank}</div>
+              </div>
+              <button onClick={()=>setEditDeposit({...d,amount:String(d.amount),target:String(d.target)})}
+                style={{background:"rgba(245,158,11,0.15)",border:"1px solid rgba(245,158,11,0.35)",borderRadius:12,padding:"6px 12px",color:"#F59E0B",fontSize:12,fontWeight:700,cursor:"pointer"}}>✏️ Изменить</button>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:12,fontSize:13}}>
+              <span style={{color:"#F59E0B",fontWeight:700}}>Вложено: {fmt(d.amount)} ₸</span>
+              {d.target>0&&<span style={{opacity:0.45}}>Цель: {fmt(d.target)} ₸</span>}
+            </div>
+            {d.target>0&&<>
+              <div style={{marginTop:8,background:"rgba(255,255,255,0.08)",borderRadius:99,height:8,overflow:"hidden"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#F59E0B,#ffd200)",borderRadius:99}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
+                <span style={{opacity:0.35}}>{pct.toFixed(1)}%</span>
+                <span style={{color:"#F59E0B",opacity:0.6}}>осталось: {fmt(Math.max(d.target-d.amount,0))} ₸</span>
+              </div>
+            </>}
+            {d.note&&<div style={{marginTop:8,fontSize:12,opacity:0.4,fontStyle:"italic"}}>{d.note}</div>}
+          </div>;
+        })}
+
+        {/* Child deposits SECOND */}
+        <SectionTitle style={{marginTop:8}}>👶 Детские депозиты (Aqyl)</SectionTitle>
+        {deposits.filter(d=>d.type==="child").map(d=>{
+          const pct = d.target>0 ? Math.min((d.amount/d.target)*100,100) : 0;
+          return <div key={d.id} style={{background:"#1c1c2e",borderRadius:20,padding:"16px",marginBottom:12,border:"1px solid rgba(79,172,254,0.2)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:700}}>{d.name}</div>
+                <div style={{fontSize:12,opacity:0.45,marginTop:2}}>{d.bank}</div>
+              </div>
+              <button onClick={()=>setEditDeposit({...d,amount:String(d.amount),target:String(d.target)})}
+                style={{background:"rgba(79,172,254,0.15)",border:"1px solid rgba(79,172,254,0.3)",borderRadius:12,padding:"6px 12px",color:"#4facfe",fontSize:12,fontWeight:700,cursor:"pointer"}}>✏️ Изменить</button>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:12,fontSize:13}}>
+              <span style={{color:"#4facfe",fontWeight:700}}>Вложено: {fmt(d.amount)} ₸</span>
+              {d.target>0&&<span style={{opacity:0.45}}>Цель: {fmt(d.target)} ₸</span>}
+            </div>
+            {d.target>0&&<>
+              <div style={{marginTop:8,background:"rgba(255,255,255,0.08)",borderRadius:99,height:8,overflow:"hidden"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#4facfe,#00f2fe)",borderRadius:99}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
+                <span style={{opacity:0.35}}>{pct.toFixed(1)}%</span>
+                <span style={{color:"#4facfe",opacity:0.6}}>осталось: {fmt(Math.max(d.target-d.amount,0))} ₸</span>
+              </div>
+            </>}
+            {d.note&&<div style={{marginTop:8,fontSize:12,opacity:0.4,fontStyle:"italic"}}>{d.note}</div>}
+          </div>;
+        })}
+
+        {/* Pension THIRD */}
+        <SectionTitle style={{marginTop:8}}>🏛️ Пенсионные накопления (ЕНПФ)</SectionTitle>
+        {deposits.filter(d=>d.type==="pension").map(d=>{
+          const pct = d.target>0 ? Math.min((d.amount/d.target)*100,100) : 0;
+          return <div key={d.id} style={{background:"#1c1c2e",borderRadius:20,padding:"16px",marginBottom:12,border:"1px solid rgba(67,233,122,0.2)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:700}}>{d.name}</div>
+                <div style={{fontSize:12,opacity:0.45,marginTop:2}}>{d.bank}</div>
+              </div>
+              <button onClick={()=>setEditDeposit({...d,amount:String(d.amount),target:String(d.target)})}
+                style={{background:"rgba(67,233,122,0.15)",border:"1px solid rgba(67,233,122,0.3)",borderRadius:12,padding:"6px 12px",color:"#43e97b",fontSize:12,fontWeight:700,cursor:"pointer"}}>✏️ Изменить</button>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:12,fontSize:13}}>
+              <span style={{color:"#43e97b",fontWeight:700}}>Вложено: {fmt(d.amount)} ₸</span>
+              {d.target>0&&<span style={{opacity:0.45}}>Цель: {fmt(d.target)} ₸</span>}
+            </div>
+            {d.target>0&&<>
+              <div style={{marginTop:8,background:"rgba(255,255,255,0.08)",borderRadius:99,height:8,overflow:"hidden"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:"linear-gradient(90deg,#43e97b,#38f9d7)",borderRadius:99}}/>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
+                <span style={{opacity:0.35}}>{pct.toFixed(1)}%</span>
+                <span style={{color:"#43e97b",opacity:0.6}}>осталось: {fmt(Math.max(d.target-d.amount,0))} ₸</span>
+              </div>
+            </>}
+            {d.note&&<div style={{marginTop:8,fontSize:12,opacity:0.4,fontStyle:"italic"}}>{d.note}</div>}
+          </div>;
+        })}
+
+      </>}
+
+      {/* ── MODALS ── */}
+
+      {/* Add Goal Modal */}
+      {showAddGoal&&<Modal onClose={()=>setShowAddGoal(false)} title="🎯 Новая цель">
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+          {["🏠","🚙","💎","🕌","💼","🏙️","🏘️","🌍","📈","💰"].map(e=>(
+            <button key={e} onClick={()=>setNewGoal(p=>({...p,emoji:e}))}
+              style={{background:newGoal.emoji===e?"rgba(247,151,30,0.3)":"#2a2a3e",border:newGoal.emoji===e?"2px solid #f7971e":"2px solid transparent",borderRadius:10,padding:"8px",fontSize:20,cursor:"pointer"}}>
+              {e}
+            </button>
+          ))}
+        </div>
+        <FInput placeholder="Название цели" value={newGoal.text} onChange={v=>setNewGoal(p=>({...p,text:v}))}/>
+        <FInput placeholder="Описание (необязательно)" value={newGoal.sub} onChange={v=>setNewGoal(p=>({...p,sub:v}))}/>
+        <div style={{display:"flex",gap:8,marginBottom:10}}>
+          {["₸","$"].map(cur=><button key={cur} onClick={()=>setNewGoal(p=>({...p,isTenge:cur==="₸"}))}
+            style={{flex:1,background:(newGoal.isTenge?cur==="₸":cur==="$")?"rgba(247,151,30,0.3)":"#2a2a3e",border:(newGoal.isTenge?cur==="₸":cur==="$")?"2px solid #f7971e":"2px solid transparent",borderRadius:12,padding:"10px",fontSize:18,fontWeight:700,color:"#fff",cursor:"pointer"}}>{cur}</button>)}
+        </div>
+        <FInput placeholder="Уже накоплено" value={String(newGoal.saved)} onChange={v=>setNewGoal(p=>({...p,saved:v}))} type="number"/>
+        <FInput placeholder="Целевая сумма" value={String(newGoal.target)} onChange={v=>setNewGoal(p=>({...p,target:v}))} type="number"/>
+        <PBtn onClick={addGoal} label="Добавить цель" gradient="linear-gradient(135deg,#f7971e,#ffd200)" textColor="#0a1a00"/>
+      </Modal>}
+
+      {/* Add Deposit Modal */}
+      {showAddDeposit&&<Modal onClose={()=>setShowAddDeposit(false)} title="🏦 Новый вклад">
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,letterSpacing:1}}>ТИП ВКЛАДА</div>
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          {[{id:"otbasy",label:"🏠 Otbasy",color:"#F59E0B"},{id:"child",label:"👶 Aqyl",color:"#4facfe"},{id:"pension",label:"🏛️ ЕНПФ",color:"#43e97b"}].map(t=>(
+            <button key={t.id} onClick={()=>setNewDeposit(p=>({...p,type:t.id,bank:t.id==="otbasy"?"Otbasy Bank":t.id==="child"?"Aqyl":"ЕНПФ"}))}
+              style={{flex:1,background:newDeposit.type===t.id?t.color+"33":"#2a2a3e",border:newDeposit.type===t.id?`2px solid ${t.color}`:"2px solid transparent",borderRadius:12,padding:"10px 4px",fontSize:11,fontWeight:600,color:"#fff",cursor:"pointer"}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <FInput placeholder="Имя / Название" value={newDeposit.name} onChange={v=>setNewDeposit(p=>({...p,name:v}))}/>
+        <FInput placeholder="Банк" value={newDeposit.bank} onChange={v=>setNewDeposit(p=>({...p,bank:v}))}/>
+        <FInput placeholder="Сумма вложений (₸)" value={String(newDeposit.amount)} onChange={v=>setNewDeposit(p=>({...p,amount:v}))} type="number"/>
+        <FInput placeholder="Цель (₸)" value={String(newDeposit.target)} onChange={v=>setNewDeposit(p=>({...p,target:v}))} type="number"/>
+        <FInput placeholder="Заметка" value={newDeposit.note} onChange={v=>setNewDeposit(p=>({...p,note:v}))}/>
+        <PBtn onClick={addDeposit} label="Добавить" gradient="linear-gradient(135deg,#F59E0B,#ffd200)" textColor="#0a1a00"/>
+      </Modal>}
+
+      {/* Edit Deposit */}
+      {editDeposit&&<Modal onClose={()=>setEditDeposit(null)} title={`✏️ ${editDeposit.name}`}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>БАНК / ПРОГРАММА</div>
+        <FInput placeholder="Банк (напр. Aqyl, ЕНПФ)" value={editDeposit.bank||""} onChange={v=>setEditDeposit(p=>({...p,bank:v}))}/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>СУММА ВЛОЖЕНИЙ (₸)</div>
+        <input type="number" placeholder="0" value={editDeposit.amount}
+          onChange={e=>setEditDeposit(p=>({...p,amount:e.target.value}))}
+          style={{width:"100%",background:"#2a2a3e",border:"2px solid #a3ffcf",borderRadius:14,padding:"13px 16px",fontSize:20,fontWeight:800,color:"#a3ffcf",outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ЦЕЛЬ (₸) — необязательно</div>
+        <input type="number" placeholder="0" value={editDeposit.target}
+          onChange={e=>setEditDeposit(p=>({...p,target:e.target.value}))}
+          style={{width:"100%",background:"#2a2a3e",border:"2px solid rgba(255,255,255,0.1)",borderRadius:14,padding:"13px 16px",fontSize:18,fontWeight:700,color:"#fff",outline:"none",boxSizing:"border-box",marginBottom:10}}/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ЗАМЕТКА</div>
+        <FInput placeholder="Заметка (необязательно)" value={editDeposit.note||""} onChange={v=>setEditDeposit(p=>({...p,note:v}))}/>
+        {Number(editDeposit.target)>0&&Number(editDeposit.amount)>0&&<div style={{background:"rgba(255,255,255,0.05)",borderRadius:14,padding:"12px 16px",marginBottom:14}}>
+          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:99,height:10,overflow:"hidden"}}>
+            <div style={{width:`${Math.min((Number(editDeposit.amount)/Number(editDeposit.target))*100,100)}%`,height:"100%",background:"linear-gradient(90deg,#F59E0B,#ffd200)",borderRadius:99}}/>
+          </div>
+          <div style={{textAlign:"center",marginTop:6,fontSize:13,color:"#F59E0B",fontWeight:700}}>
+            {((Number(editDeposit.amount)/Number(editDeposit.target))*100).toFixed(1)}%
+          </div>
+        </div>}
+        <PBtn onClick={()=>saveDeposit(editDeposit)} label="Сохранить" gradient="linear-gradient(135deg,#F59E0B,#ffd200)" textColor="#0a1a00"/>
+      </Modal>}
+
+      {/* Edit Finance */}
+      {editFin&&<Modal onClose={()=>setEditFin(null)} title="✏️ Редактировать запись">
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,letterSpacing:1}}>ТИП</div>
+        <div style={{display:"flex",gap:8,marginBottom:14}}>{FIN_TYPES.map(ft=><button key={ft.id} onClick={()=>setEditFin(p=>({...p,type:ft.id}))} style={{flex:1,background:editFin.type===ft.id?ft.color+"33":"#2a2a3e",border:editFin.type===ft.id?`2px solid ${ft.color}`:"2px solid transparent",borderRadius:12,padding:"9px 4px",cursor:"pointer",color:"#fff",fontSize:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>{ft.emoji}<span style={{fontSize:10}}>{ft.label}</span></button>)}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,letterSpacing:1}}>КАТЕГОРИЯ</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:14}}>{FIN_CATS.map(c=><button key={c.id} onClick={()=>setEditFin(p=>({...p,cat:c.id}))} style={{background:editFin.cat===c.id?c.color+"44":"#2a2a3e",border:editFin.cat===c.id?`2px solid ${c.color}`:"2px solid transparent",borderRadius:12,padding:"8px 4px",cursor:"pointer",color:"#fff",fontSize:16,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>{c.emoji}<span style={{fontSize:9,opacity:0.7}}>{c.label}</span></button>)}</div>
+        <FInput placeholder="Название" value={editFin.label} onChange={v=>setEditFin(p=>({...p,label:v}))}/>
+        <FInput placeholder="Сумма (₸)" value={String(editFin.amount)} onChange={v=>setEditFin(p=>({...p,amount:v}))} type="number"/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:5}}>ДАТА ПЛАТЕЖА</div>
+        <FInput value={editFin.date} onChange={v=>setEditFin(p=>({...p,date:v}))} type="date"/>
+        <FInput placeholder="Заметка" value={editFin.note||""} onChange={v=>setEditFin(p=>({...p,note:v}))}/>
+        <PBtn onClick={saveEditFin} label="Сохранить" gradient="linear-gradient(135deg,#667eea,#764ba2)"/>
+      </Modal>}
+
+      {/* Income editor */}
+      {showIncomeEditor&&incomeEdit&&<Modal onClose={()=>setShowIncomeEditor(false)} title="💚 Доход месяца">
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:10,letterSpacing:1}}>ИСТОЧНИКИ ДОХОДА</div>
+        {incomeEdit.sources.map((src,i)=><div key={src.id} style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+          <input placeholder="Источник" value={src.label} onChange={e=>{const s=[...incomeEdit.sources];s[i]={...s[i],label:e.target.value};setIncomeEdit({sources:s});}} style={{flex:2,background:"#2a2a3e",border:"none",borderRadius:12,padding:"11px 14px",fontSize:13,color:"#fff",outline:"none",boxSizing:"border-box"}}/>
+          <input placeholder="₸" type="number" value={src.amount} onChange={e=>{const s=[...incomeEdit.sources];s[i]={...s[i],amount:e.target.value};setIncomeEdit({sources:s});}} style={{flex:1,background:"#2a2a3e",border:"none",borderRadius:12,padding:"11px 14px",fontSize:13,color:"#43e97b",fontWeight:700,outline:"none",boxSizing:"border-box"}}/>
+          <button onClick={()=>{const s=incomeEdit.sources.filter((_,j)=>j!==i);setIncomeEdit({sources:s});}} style={{background:"rgba(255,100,100,0.1)",border:"none",borderRadius:10,padding:"10px 12px",color:"#f5576c",cursor:"pointer",fontSize:15}}>×</button>
+        </div>)}
+        <button onClick={()=>setIncomeEdit(p=>({sources:[...p.sources,{id:Date.now(),label:"",amount:""}]}))} style={{width:"100%",background:"rgba(67,233,122,0.1)",border:"1px dashed rgba(67,233,122,0.3)",borderRadius:14,padding:"11px",fontSize:13,color:"#43e97b",cursor:"pointer",marginBottom:14,fontWeight:600}}>+ Добавить источник</button>
+        {incomeEdit.sources.length>0&&<div style={{background:"rgba(67,233,122,0.08)",borderRadius:14,padding:"12px 16px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:13,opacity:0.6}}>Итого:</span>
+          <span style={{fontSize:22,fontWeight:800,color:"#43e97b"}}>{fmt(incomeEdit.sources.reduce((s,x)=>s+Number(x.amount||0),0))} ₸</span>
+        </div>}
+        <PBtn onClick={()=>{saveMonthIncome(incomeEdit.sources);setShowIncomeEditor(false);}} label="Сохранить" gradient="linear-gradient(135deg,#11998e,#43e97b)" textColor="#0a2018"/>
+      </Modal>}
+
+      {/* Add Finance */}
+      {showAddFin&&<Modal onClose={()=>setShowAddFin(false)} title="Новая запись">
+        <div style={{display:"flex",gap:8,marginBottom:14}}>{FIN_TYPES.map(ft=><button key={ft.id} onClick={()=>setNewFin(p=>({...p,type:ft.id}))} style={{flex:1,background:newFin.type===ft.id?ft.color+"33":"#2a2a3e",border:newFin.type===ft.id?`2px solid ${ft.color}`:"2px solid transparent",borderRadius:12,padding:"10px 4px",cursor:"pointer",color:"#fff",fontSize:18,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>{ft.emoji}<span style={{fontSize:10}}>{ft.label}</span></button>)}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:12}}>{FIN_CATS.map(c=><button key={c.id} onClick={()=>setNewFin(p=>({...p,cat:c.id}))} style={{background:newFin.cat===c.id?c.color+"44":"#2a2a3e",border:newFin.cat===c.id?`2px solid ${c.color}`:"2px solid transparent",borderRadius:12,padding:"8px 4px",cursor:"pointer",color:"#fff",fontSize:18,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>{c.emoji}<span style={{fontSize:9,opacity:0.7}}>{c.label}</span></button>)}</div>
+        <FInput placeholder="Название" value={newFin.label} onChange={v=>setNewFin(p=>({...p,label:v}))}/>
+        <FInput placeholder="Сумма (₸)" value={newFin.amount} onChange={v=>setNewFin(p=>({...p,amount:v}))} type="number"/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:5}}>ДАТА ПЛАТЕЖА</div>
+        <FInput value={newFin.date} onChange={v=>setNewFin(p=>({...p,date:v}))} type="date"/>
+        <FInput placeholder="Заметка" value={newFin.note} onChange={v=>setNewFin(p=>({...p,note:v}))}/>
+        <PBtn onClick={addFinance} label="Добавить" gradient="linear-gradient(135deg,#11998e,#38ef7d)" textColor="#0a2018"/>
+      </Modal>}
+
+      {/* Add Task */}
+      {showAddTask&&<Modal onClose={()=>setShowAddTask(false)} title="Новая задача">
+        <FInput placeholder="Что нужно сделать?" value={newTask.text} onChange={v=>setNewTask(p=>({...p,text:v}))}/>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+          {Object.keys(CAT_COLORS).map(c=><button key={c} onClick={()=>setNewTask(p=>({...p,category:c}))} style={{background:newTask.category===c?CAT_COLORS[c]+"44":"#2a2a3e",border:newTask.category===c?`2px solid ${CAT_COLORS[c]}`:"2px solid transparent",borderRadius:12,padding:"7px 14px",fontSize:12,fontWeight:600,color:"#fff",cursor:"pointer"}}>{CAT_EMOJI[c]} {c}</button>)}
+        </div>
+        <FInput placeholder="Заметка" value={newTask.note} onChange={v=>setNewTask(p=>({...p,note:v}))}/>
+        <PBtn onClick={addTask} label="Добавить" gradient="linear-gradient(135deg,#4facfe,#00f2fe)"/>
+      </Modal>}
+
+      {/* Rollover */}
+      {showRollover&&<Modal onClose={()=>setShowRollover(false)} title={`🔄 Перенести на ${getMonthLabel(currentMonth+1)}`}>
+        {mFin.filter(f=>f.type==="planned"&&!f.paid).length>0&&<>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,letterSpacing:1}}>НЕОПЛАЧЕННЫЕ ПЛАТЕЖИ</div>
+          {mFin.filter(f=>f.type==="planned"&&!f.paid).map(f=><div key={f.id} onClick={()=>setRolloverSel(s=>({...s,finances:s.finances.includes(f.id)?s.finances.filter(x=>x!==f.id):[...s.finances,f.id]}))} style={{display:"flex",alignItems:"center",gap:12,background:rolloverSel.finances.includes(f.id)?"rgba(96,165,250,0.15)":"#2a2a3e",borderRadius:14,padding:"11px 14px",marginBottom:8,cursor:"pointer",border:rolloverSel.finances.includes(f.id)?"1px solid #60A5FA":"1px solid transparent"}}>
+            <div style={{width:22,height:22,borderRadius:"50%",border:`2px solid ${rolloverSel.finances.includes(f.id)?"#60A5FA":"rgba(255,255,255,0.2)"}`,background:rolloverSel.finances.includes(f.id)?"#60A5FA":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,flexShrink:0}}>{rolloverSel.finances.includes(f.id)?"✓":""}</div>
+            <div style={{flex:1,fontSize:13,fontWeight:600}}>{f.label}</div>
+            <div style={{fontSize:12,color:"#60A5FA",fontWeight:700}}>{fmt(f.amount)} ₸</div>
+          </div>)}
+        </>}
+        {mTasks.filter(t=>t.status!=="Готово").length>0&&<>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,marginTop:14,letterSpacing:1}}>НЕЗАВЕРШЁННЫЕ ДЕЛА</div>
+          {mTasks.filter(t=>t.status!=="Готово").map(t=><div key={t.id} onClick={()=>setRolloverSel(s=>({...s,tasks:s.tasks.includes(t.id)?s.tasks.filter(x=>x!==t.id):[...s.tasks,t.id]}))} style={{display:"flex",alignItems:"center",gap:12,background:rolloverSel.tasks.includes(t.id)?"rgba(79,172,254,0.15)":"#2a2a3e",borderRadius:14,padding:"11px 14px",marginBottom:8,cursor:"pointer",border:rolloverSel.tasks.includes(t.id)?"1px solid #4facfe":"1px solid transparent"}}>
+            <div style={{width:22,height:22,borderRadius:"50%",border:`2px solid ${rolloverSel.tasks.includes(t.id)?"#4facfe":"rgba(255,255,255,0.2)"}`,background:rolloverSel.tasks.includes(t.id)?"#4facfe":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,flexShrink:0}}>{rolloverSel.tasks.includes(t.id)?"✓":""}</div>
+            <div style={{flex:1,fontSize:13,fontWeight:600}}>{t.text}</div>
+            <div style={{fontSize:10,color:CAT_COLORS[t.category]||"#888",background:(CAT_COLORS[t.category]||"#888")+"22",borderRadius:6,padding:"2px 7px"}}>{t.category}</div>
+          </div>)}
+        </>}
+        <div style={{marginTop:16}}><PBtn onClick={doRollover} label={`Перенести → ${getMonthLabel(currentMonth+1)}`} gradient="linear-gradient(135deg,#f7971e,#ffd200)" textColor="#0a1a00"/></div>
+      </Modal>}
+
+      {/* Add Position */}
+      {showAddPos&&<Modal onClose={()=>setShowAddPos(false)} title={`Новая позиция — ${INV_PORTFOLIOS.find(p=>p.id===newPos.portfolio)?.emoji} ${INV_PORTFOLIOS.find(p=>p.id===newPos.portfolio)?.label}`}>
+        {/* Portfolio selector */}
+        <div style={{display:"flex",gap:6,overflowX:"auto",marginBottom:16,paddingBottom:4}}>
+          {INV_PORTFOLIOS.map(p=><button key={p.id} onClick={()=>setNewPos(prev=>({...prev,portfolio:p.id,platform:p.platform||""}))}
+            style={{flexShrink:0,background:newPos.portfolio===p.id?p.color+"44":"#2a2a3e",border:newPos.portfolio===p.id?`2px solid ${p.color}`:"2px solid transparent",borderRadius:12,padding:"8px 12px",cursor:"pointer",color:"#fff",fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:16}}>{p.emoji}</span>{p.label}
+          </button>)}
+        </div>
+
+        {/* Stock/Crypto fields */}
+        {["us","kz","crypto"].includes(newPos.portfolio)&&<>
+          <div style={{display:"flex",gap:8,marginBottom:12}}>
+            {["Binance","Tradernet"].map(pl=><button key={pl} onClick={()=>setNewPos(p=>({...p,platform:pl}))}
+              style={{flex:1,background:newPos.platform===pl?"rgba(167,139,250,0.3)":"#2a2a3e",border:newPos.platform===pl?"2px solid #A78BFA":"2px solid transparent",borderRadius:12,padding:"8px",fontSize:12,fontWeight:600,color:"#fff",cursor:"pointer"}}>
+              {pl==="Binance"?"💎":"📊"} {pl}
+            </button>)}
+          </div>
+          <FInput placeholder="Тикер (BTC, AAPL, KZTK...)" value={newPos.ticker} onChange={v=>setNewPos(p=>({...p,ticker:v.toUpperCase()}))}/>
+          <FInput placeholder="Название (необязательно)" value={newPos.name} onChange={v=>setNewPos(p=>({...p,name:v}))}/>
+          <FInput placeholder="Количество" value={newPos.qty} onChange={v=>setNewPos(p=>({...p,qty:v}))} type="number"/>
+          <FInput placeholder="Средняя цена покупки" value={newPos.avgPrice} onChange={v=>setNewPos(p=>({...p,avgPrice:v}))} type="number"/>
+          <FInput placeholder="Текущая цена" value={newPos.currentPrice} onChange={v=>setNewPos(p=>({...p,currentPrice:v}))} type="number"/>
+        </>}
+
+        {/* Business/Realty fields */}
+        {["business","realty"].includes(newPos.portfolio)&&<>
+          <FInput placeholder={newPos.portfolio==="realty"?"Название объекта (напр. Квартира Актобе)":"Название проекта (напр. Салон красоты)"} value={newPos.name} onChange={v=>setNewPos(p=>({...p,name:v,ticker:v.slice(0,10)}))}/>
+          <FInput placeholder="Описание / заметка" value={newPos.ticker===newPos.name.slice(0,10)?"":(newPos.ticker||"")} onChange={v=>setNewPos(p=>({...p,ticker:v}))}/>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ВЛОЖЕНО (₸)</div>
+          <FInput placeholder="Сумма вложений" value={newPos.avgPrice} onChange={v=>setNewPos(p=>({...p,avgPrice:v,qty:"1"}))} type="number"/>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ТЕКУЩАЯ СТОИМОСТЬ (₸)</div>
+          <FInput placeholder="Текущая стоимость" value={newPos.currentPrice} onChange={v=>setNewPos(p=>({...p,currentPrice:v}))} type="number"/>
+        </>}
+
+        <PBtn onClick={addPosition} label="Добавить" gradient={`linear-gradient(135deg,${INV_PORTFOLIOS.find(p=>p.id===newPos.portfolio)?.color||"#A78BFA"},#6d28d9)`}/>
+      </Modal>}
+
+      {/* Edit Position */}
+      {editPos&&<Modal onClose={()=>setEditPos(null)} title={`✏️ ${editPos.name||editPos.ticker}`}>
+        {/* Stock/Crypto */}
+        {["us","kz","crypto"].includes(editPos.portfolio)&&<>
+          <FInput placeholder="Количество" value={String(editPos.qty)} onChange={v=>setEditPos(p=>({...p,qty:v}))} type="number"/>
+          <FInput placeholder="Средняя цена" value={String(editPos.avgPrice)} onChange={v=>setEditPos(p=>({...p,avgPrice:v}))} type="number"/>
+          <FInput placeholder="Текущая цена" value={String(editPos.currentPrice)} onChange={v=>setEditPos(p=>({...p,currentPrice:v}))} type="number"/>
+        </>}
+        {/* Business/Realty */}
+        {["business","realty"].includes(editPos.portfolio)&&<>
+          <FInput placeholder="Название" value={editPos.name||""} onChange={v=>setEditPos(p=>({...p,name:v}))}/>
+          <FInput placeholder="Описание / заметка" value={editPos.ticker||""} onChange={v=>setEditPos(p=>({...p,ticker:v}))}/>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ВЛОЖЕНО (₸)</div>
+          <FInput placeholder="Сумма вложений" value={String(editPos.avgPrice)} onChange={v=>setEditPos(p=>({...p,avgPrice:v}))} type="number"/>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ТЕКУЩАЯ СТОИМОСТЬ (₸)</div>
+          <FInput placeholder="Текущая стоимость" value={String(editPos.currentPrice)} onChange={v=>setEditPos(p=>({...p,currentPrice:v}))} type="number"/>
+        </>}
+        <PBtn onClick={saveEditPos} label="Сохранить" gradient={`linear-gradient(135deg,${INV_PORTFOLIOS.find(p=>p.id===editPos.portfolio)?.color||"#A78BFA"},#6d28d9)`}/>
+      </Modal>}
+
+      {/* Edit Inv Goal */}
+      {editInvGoal&&<Modal onClose={()=>setEditInvGoal(null)} title={`✏️ ${INV_PORTFOLIOS.find(p=>p.id===editInvGoal.portfolio)?.emoji} ${INV_PORTFOLIOS.find(p=>p.id===editInvGoal.portfolio)?.label}`}>
+        {/* Currency selector */}
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:8,letterSpacing:1}}>ВАЛЮТА</div>
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {["₸","$","€","£"].map(cur=>(
+            <button key={cur} onClick={()=>setEditInvGoal(p=>({...p,currency:cur}))}
+              style={{flex:1,background:editInvGoal.currency===cur?"rgba(167,139,250,0.3)":"#2a2a3e",border:editInvGoal.currency===cur?"2px solid #A78BFA":"2px solid transparent",borderRadius:12,padding:"10px 4px",cursor:"pointer",color:editInvGoal.currency===cur?"#fff":"rgba(255,255,255,0.5)",fontSize:18,fontWeight:700}}>
+              {cur}
+            </button>
+          ))}
+        </div>
+        {/* Deposited */}
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ВЛОЖЕНО СЕЙЧАС</div>
+        <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+          <input type="number" placeholder="0" value={String(editInvGoal.deposited)}
+            onChange={e=>setEditInvGoal(p=>({...p,deposited:e.target.value}))}
+            style={{flex:1,background:"#2a2a3e",border:"2px solid #a3ffcf",borderRadius:14,padding:"13px 16px",fontSize:18,fontWeight:700,color:"#a3ffcf",outline:"none",boxSizing:"border-box"}}/>
+          <span style={{fontSize:18,fontWeight:700,opacity:0.6,minWidth:24}}>{editInvGoal.currency}</span>
+        </div>
+        {/* Target */}
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:6,letterSpacing:1}}>ЦЕЛЕВАЯ СУММА (необязательно)</div>
+        <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+          <input type="number" placeholder="0" value={String(editInvGoal.target)}
+            onChange={e=>setEditInvGoal(p=>({...p,target:e.target.value}))}
+            style={{flex:1,background:"#2a2a3e",border:"2px solid rgba(255,255,255,0.1)",borderRadius:14,padding:"13px 16px",fontSize:18,fontWeight:700,color:"#fff",outline:"none",boxSizing:"border-box"}}/>
+          <span style={{fontSize:18,fontWeight:700,opacity:0.6,minWidth:24}}>{editInvGoal.currency}</span>
+        </div>
+        {/* Live progress */}
+        {Number(editInvGoal.target)>0&&<div style={{background:"#2a2a3e",borderRadius:16,padding:"14px",marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:8}}>
+            <span style={{opacity:0.5}}>До цели</span>
+            <span style={{fontWeight:700,color:"#A78BFA"}}>{Math.min((Number(editInvGoal.deposited)/Number(editInvGoal.target))*100,100).toFixed(1)}%</span>
+          </div>
+          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:99,height:10,overflow:"hidden"}}>
+            <div style={{width:`${Math.min((Number(editInvGoal.deposited)/Number(editInvGoal.target))*100,100)}%`,height:"100%",background:"linear-gradient(90deg,#A78BFA,#ffd200)",borderRadius:99}}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,opacity:0.45}}>
+            <span>Вложено: {fmt(Number(editInvGoal.deposited))} {editInvGoal.currency}</span>
+            <span>Осталось: {fmt(Math.max(Number(editInvGoal.target)-Number(editInvGoal.deposited),0))} {editInvGoal.currency}</span>
+          </div>
+        </div>}
+        <PBtn onClick={saveInvGoal} label="Сохранить" gradient="linear-gradient(135deg,#A78BFA,#6d28d9)"/>
+      </Modal>}
+
+      {/* Edit Goal */}
+      {editGoal&&<Modal onClose={()=>setEditGoal(null)} title={`${editGoal.emoji} ${editGoal.text}`}>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:5}}>УЖЕ НАКОПЛЕНО</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+          <input type="number" value={savedInput} onChange={e=>setSavedInput(e.target.value)} placeholder="0" style={{flex:1,background:"#2a2a3e",border:"2px solid #a3ffcf",borderRadius:14,padding:"13px 16px",fontSize:17,fontWeight:700,color:"#a3ffcf",outline:"none",boxSizing:"border-box"}}/>
+          <span style={{fontSize:15,opacity:0.5}}>{editGoal.isTenge?"₸":"$"}</span>
+        </div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:5}}>ЦЕЛЕВАЯ СУММА</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16}}>
+          <input type="number" value={targetInput} onChange={e=>setTargetInput(e.target.value)} placeholder="0" style={{flex:1,background:"#2a2a3e",border:"2px solid rgba(255,255,255,0.1)",borderRadius:14,padding:"13px 16px",fontSize:17,fontWeight:700,color:"#fff",outline:"none",boxSizing:"border-box"}}/>
+          <span style={{fontSize:15,opacity:0.5}}>{editGoal.isTenge?"₸":"$"}</span>
+        </div>
+        {Number(targetInput)>0&&<div style={{marginBottom:16}}>
+          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:99,height:10,overflow:"hidden"}}><div style={{width:`${Math.min((Number(savedInput)/Number(targetInput))*100,100)}%`,height:"100%",background:"linear-gradient(90deg,#f7971e,#ffd200)",borderRadius:99}}/></div>
+          <div style={{textAlign:"center",marginTop:5,fontSize:12,color:"#ffd200",fontWeight:600}}>{((Number(savedInput)/Number(targetInput))*100).toFixed(1)}%</div>
+        </div>}
+        <PBtn onClick={saveGoal} label="Сохранить" gradient="linear-gradient(135deg,#f7971e,#ffd200)" textColor="#0a1a00"/>
+      </Modal>}
+
+    </div>
+
+    {/* Bottom Nav */}
+    <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"rgba(15,15,26,0.96)",backdropFilter:"blur(20px)",borderTop:"1px solid rgba(255,255,255,0.07)",display:"flex",padding:"8px 2px 22px"}}>
+      {[
+        {id:"dashboard",emoji:"🏠",label:"Главная",acc:"#667eea"},
+        {id:"tasks",    emoji:"📋",label:"Дела",   acc:"#4facfe"},
+        {id:"finance",  emoji:"💳",label:"Финансы",acc:"#38ef7d"},
+        {id:"invest",   emoji:"📈",label:"Инвест", acc:"#A78BFA"},
+        {id:"goals",    emoji:"🎯",label:"Цели",   acc:"#f7971e"},
+        {id:"deposits", emoji:"🏦",label:"Вклады", acc:"#F59E0B"},
+      ].map(item=>{
+        const active=tab===item.id;
+        return <button key={item.id} onClick={()=>setTab(item.id)} style={{flex:1,minWidth:0,background:"none",border:"none",cursor:"pointer",padding:"5px 1px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,color:active?"#fff":"rgba(255,255,255,0.28)"}}>
+          <span style={{fontSize:18,filter:active?"none":"grayscale(1)",lineHeight:1}}>{item.emoji}</span>
+          <span style={{fontSize:8,fontWeight:active?700:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"100%"}}>{item.label}</span>
+          {active&&<div style={{width:3,height:3,borderRadius:"50%",background:item.acc}}/>}
+        </button>;
+      })}
+    </div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
